@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * apimodels-cover — generate platform-ready cover / thumbnail images via
+ * coverbean-skill — generate platform-ready cover / thumbnail images via
  * apimodels.app (gpt-image-2-all). Submits the job, polls, downloads the image,
  * and crops it to the exact size each platform expects.
  *

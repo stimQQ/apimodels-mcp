@@ -1,9 +1,9 @@
 ---
-name: apimodels-cover
-description: Generate ready-to-post cover / thumbnail images for Xiaohongshu (小红书), WeChat Official Account (微信公众号), Douyin (抖音), TikTok, and YouTube via apimodels.app. Use when the user wants a cover, thumbnail, or 封面 for a post, article, or video — you (the agent) write the title and image prompt, this skill renders it at the exact size each platform expects. Needs an apimodels.app API key.
+name: coverbean-skill
+description: Generate ready-to-post cover / thumbnail images for Xiaohongshu (小红书), WeChat Official Account (微信公众号), Douyin (抖音), TikTok, and YouTube. Use when the user wants a cover, thumbnail, or 封面 for a post, article, or video — you (the agent) write the title and image prompt, this skill renders it at the exact size each platform expects. Powered by apimodels.app; needs an apimodels.app API key.
 ---
 
-# apimodels-cover
+# coverbean-skill
 
 Turn a topic (or an exact title) into a **platform-ready cover image** — sized correctly for 小红书 / 微信公众号 / 抖音 / TikTok / YouTube — using [apimodels.app](https://apimodels.app)'s `gpt-image-2-all` image model.
 
