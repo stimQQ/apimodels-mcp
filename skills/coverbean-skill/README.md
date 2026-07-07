@@ -6,7 +6,7 @@ Coverbean is a [Claude Agent Skill](https://docs.claude.com/en/docs/agents-and-t
 
 - **Five platforms, exact sizes** — 3:4, 2.35:1, 9:16, 16:9, cropped precisely (via ffmpeg).
 - **Great text-in-image** — short titles render crisp and legible.
-- **Cheap** — a 1K cover is **$0.005**; the **$1 free credit** on signup is ~**200 covers**.
+- **Cheap** — a 1K cover is **$0.005**, so **$1 of credit is ~200 covers**.
 - **No lock-in on thinking** — the agent (Claude, etc.) does the copywriting for free; you only pay for the render.
 
 | Platform | Output size |
@@ -20,7 +20,7 @@ Coverbean is a [Claude Agent Skill](https://docs.claude.com/en/docs/agents-and-t
 
 ## Setup (about a minute)
 
-1. **Sign up** at <https://apimodels.app> — new accounts get **$1 free** (~200 covers).
+1. **Sign up** at <https://apimodels.app> and add a little credit (a cover is **$0.005** — $1 ≈ 200 covers).
 2. **Create an API key** at <https://apimodels.app/console/api-keys>.
 3. **Export it:**
    ```bash

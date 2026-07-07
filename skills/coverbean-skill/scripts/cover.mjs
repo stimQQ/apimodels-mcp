@@ -28,7 +28,7 @@ const BASE = process.env.APIMODELS_BASE_URL || 'https://apimodels.app'
 const KEY = process.env.APIMODELS_API_KEY
 if (!KEY) {
   console.error(`APIMODELS_API_KEY is not set. To get one (~1 min):
-  1. Sign up at https://apimodels.app  (new accounts get $1 free — about 200 covers)
+  1. Sign up at https://apimodels.app and add a little credit (a cover is $0.005 — $1 is ~200 covers)
   2. Create a key at https://apimodels.app/console/api-keys
   3. export APIMODELS_API_KEY=sk-...   then re-run this command.`)
   process.exit(1)
