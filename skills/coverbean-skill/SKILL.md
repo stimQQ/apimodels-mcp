@@ -9,13 +9,20 @@ Turn a topic (or an exact title) into a **platform-ready cover image** — sized
 
 **You are the brain here.** You (the host agent) analyze the content, write a punchy title, and compose the image prompt. This skill only renders the image and crops it to the right size — so it costs the user nothing for the thinking, only for the image render.
 
-## Prerequisites
+## First-time setup (walk the user through this if `APIMODELS_API_KEY` is missing)
 
-- `APIMODELS_API_KEY` in the environment (get one at <https://apimodels.app/console/api-keys>).
-- Node.js 18+ (the script uses built-in `fetch`).
-- `ffmpeg` on PATH — used to crop to each platform's exact size. If it's missing, the script still saves the raw image and tells you the target dimensions.
+Coverbean renders through [apimodels.app](https://apimodels.app). The user needs a free account + an API key. It takes about a minute:
 
-If `APIMODELS_API_KEY` isn't set, ask the user to export it first.
+1. **Sign up** at <https://apimodels.app> — new accounts get **$1 free credit**, which is about **200 covers** (a 1K cover costs $0.005).
+2. **Create an API key** at <https://apimodels.app/console/api-keys> and copy it (it starts with `sk-`).
+3. **Export it** in the shell that will run the skill:
+   ```bash
+   export APIMODELS_API_KEY=sk-xxxxxxxx
+   ```
+
+Then you're ready. Also needed: **Node.js 18+** (the script uses built-in `fetch`) and, optionally, **`ffmpeg`** on PATH for exact per-platform cropping (without it the raw image is still saved).
+
+> If the user hasn't set `APIMODELS_API_KEY`, don't guess — walk them through the three steps above first, then continue.
 
 ## Workflow
 
