@@ -14,6 +14,23 @@ One key unlocks GPT-5.5, Claude, Gemini, GLM, DeepSeek, Qwen, Seedance, Veo, Kli
 | `generate_video` | Text-to-video (optional reference image); returns the video URL(s). |
 | `text_to_speech` | Text-to-speech (MiniMax voices); returns the audio URL. ElevenLabs TTS is not exposed here — it streams raw bytes from `POST /v1/tts/stream` rather than returning a URL. |
 
+### Local images just work
+
+`image_url` on `generate_image` and `generate_video` takes any of these:
+
+- a public `https://…` URL — passed through untouched
+- **a local file path** — `/Users/me/photo.png`, `./ref.jpg`, `~/Pictures/x.webp`
+- **a URL on your own machine** — `http://127.0.0.1:8000/photo.png`, `http://localhost:3000/…`
+- a `data:image/png;base64,…` URI
+
+The last three are uploaded for you first, and the resulting public URL is what gets
+generated from. This has to happen here rather than server-side: the file exists only on
+your machine, and `127.0.0.1` means *our* server when our server resolves it — which is why
+passing one to the REST API directly fails with `private/reserved IP addresses not allowed`.
+This MCP server runs next to your files, so it can do what our servers cannot.
+
+Uploads land in your account's R2 space and are auto-deleted after 7 days.
+
 ## Setup
 
 1. Get an API key at <https://apimodels.app/console/api-keys> (it looks like `sk_…`).

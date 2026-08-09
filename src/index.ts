@@ -16,6 +16,10 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
 
+import { readFile } from 'node:fs/promises'
+import { basename, join } from 'node:path'
+import { homedir } from 'node:os'
+
 const API_KEY = process.env.APIMODELS_API_KEY
 const BASE_URL = (process.env.APIMODELS_BASE_URL || 'https://apimodels.app/api/v1').replace(/\/$/, '')
 const POLL_TIMEOUT_MS = Number(process.env.APIMODELS_TIMEOUT_MS) || 300_000
@@ -45,6 +49,91 @@ async function apiFetch(path: string, init?: RequestInit): Promise<any> {
     throw new Error(`apimodels API error (HTTP ${res.status}): ${msg}`)
   }
   return json
+}
+
+/**
+ * Turn whatever the caller gave us into a URL our servers can actually fetch.
+ *
+ * The problem this exists for: agents keep passing a local path, or a URL on the
+ * user's own machine like `http://127.0.0.1:8000/photo.png`. Our generation
+ * servers cannot reach either — `127.0.0.1` there means *our* box, not theirs —
+ * so the job dies with an upstream "private/reserved IP addresses not allowed"
+ * that tells the agent nothing about what to do instead.
+ *
+ * It cannot be fixed server-side: the file only exists on the user's machine.
+ * But this MCP server *runs* on that machine, so it can read the path, or fetch
+ * that localhost URL, and upload the bytes to `/v1/files` — which hands back a
+ * public URL. From the caller's point of view a local file just works.
+ *
+ * Passes public http(s) URLs straight through untouched.
+ */
+async function resolveImageInput(input: string): Promise<string> {
+  const raw = input.trim()
+
+  // data: URI — already bytes, just upload them.
+  if (raw.startsWith('data:')) {
+    const m = raw.match(/^data:([^;,]+)(;base64)?,(.*)$/s)
+    if (!m) throw new Error('Malformed data: URI')
+    const [, mime, isB64, payload] = m
+    const buf = Buffer.from(isB64 ? payload : decodeURIComponent(payload), isB64 ? 'base64' : 'utf8')
+    return uploadBytes(buf, `input.${(mime.split('/')[1] || 'png').replace(/[^\w]/g, '')}`, mime)
+  }
+
+  if (/^https?:\/\//i.test(raw)) {
+    const host = new URL(raw).hostname
+    const isLocal =
+      host === 'localhost' ||
+      host === '::1' ||
+      /^127\./.test(host) ||
+      /^10\./.test(host) ||
+      /^192\.168\./.test(host) ||
+      /^172\.(1[6-9]|2\d|3[01])\./.test(host) ||
+      host.endsWith('.local')
+    if (!isLocal) return raw // public URL — our servers can fetch it themselves
+
+    // Reachable from here (this process is on the user's machine), not from ours.
+    const res = await fetch(raw)
+    if (!res.ok) throw new Error(`Could not read ${raw} from this machine (HTTP ${res.status})`)
+    const buf = Buffer.from(await res.arrayBuffer())
+    const name = decodeURIComponent(new URL(raw).pathname.split('/').pop() || 'input.png')
+    return uploadBytes(buf, name, res.headers.get('content-type') || guessMime(name))
+  }
+
+  // Anything else is treated as a filesystem path (absolute, relative, or ~).
+  const path = raw.startsWith('~') ? join(homedir(), raw.slice(1)) : raw
+  let buf: Buffer
+  try {
+    buf = await readFile(path)
+  } catch {
+    throw new Error(
+      `Not a URL, and no readable file at "${raw}". Pass a public https:// URL, a local file path, or a data: URI.`,
+    )
+  }
+  return uploadBytes(buf, basename(path), guessMime(path))
+}
+
+function guessMime(name: string): string {
+  const ext = name.toLowerCase().split('.').pop() || ''
+  return ({ png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp',
+    gif: 'image/gif', bmp: 'image/bmp', heic: 'image/heic' } as Record<string, string>)[ext] || 'image/png'
+}
+
+/** Upload bytes to /v1/files and return the public URL it mints. */
+async function uploadBytes(buf: Buffer, filename: string, contentType: string): Promise<string> {
+  const form = new FormData()
+  form.append('file', new Blob([new Uint8Array(buf)], { type: contentType }), filename)
+  // No Content-Type header here on purpose — fetch must set the multipart boundary.
+  const res = await fetch(`${BASE_URL}/files`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${API_KEY}` },
+    body: form,
+  })
+  const json: any = await res.json().catch(() => ({}))
+  const url = json?.data?.publicUrl
+  if (!res.ok || !url) {
+    throw new Error(`Upload of ${filename} failed: ${json?.msg || `HTTP ${res.status}`}`)
+  }
+  return url
 }
 
 /** Submit an async generation (image/video/audio), then poll until it finishes. */
@@ -121,7 +210,7 @@ server.tool(
     model: z.string().default('gpt-image-2').describe('Image model id, e.g. gpt-image-2, gpt-image-2-lite (cheapest), gemini-3-pro-image, gemini-2.5-flash-image, doubao-seedream-4-5-251128.'),
     aspect_ratio: z.string().optional().describe('Optional aspect ratio, e.g. 1:1, 16:9, 9:16.'),
     resolution: z.string().optional().describe('Optional resolution, e.g. 1K, 2K, 4K.'),
-    image_url: z.string().optional().describe('Optional input image URL for image-to-image edits.'),
+    image_url: z.string().optional().describe('Optional input image for image-to-image edits. Accepts a public https:// URL, a LOCAL FILE PATH, a localhost URL, or a data: URI — local sources are uploaded for you automatically.'),
   },
   async ({ prompt, model, aspect_ratio, resolution, image_url }) => {
     try {
@@ -129,7 +218,7 @@ server.tool(
         model, prompt,
         ...(aspect_ratio ? { aspect_ratio } : {}),
         ...(resolution ? { resolution } : {}),
-        ...(image_url ? { image_url } : {}),
+        ...(image_url ? { image_url: await resolveImageInput(image_url) } : {}),
       })
       return text(urls.join('\n'))
     } catch (e) { return fail(e) }
@@ -145,7 +234,7 @@ server.tool(
     aspect_ratio: z.string().optional().describe('Optional aspect ratio, e.g. 16:9, 9:16, 1:1.'),
     resolution: z.string().optional().describe('Optional resolution, e.g. 480p, 720p, 1080p.'),
     duration: z.union([z.number(), z.string()]).optional().describe('Optional duration in seconds, e.g. 5 or 10.'),
-    image_url: z.string().optional().describe('Optional first-frame / reference image URL for image-to-video.'),
+    image_url: z.string().optional().describe('Optional first-frame / reference image for image-to-video. Accepts a public https:// URL, a LOCAL FILE PATH, a localhost URL, or a data: URI — local sources are uploaded for you automatically.'),
   },
   async ({ prompt, model, aspect_ratio, resolution, duration, image_url }) => {
     try {
@@ -154,7 +243,7 @@ server.tool(
         ...(aspect_ratio ? { aspect_ratio } : {}),
         ...(resolution ? { resolution } : {}),
         ...(duration != null ? { duration } : {}),
-        ...(image_url ? { images: [image_url] } : {}),
+        ...(image_url ? { images: [await resolveImageInput(image_url)] } : {}),
       })
       return text(urls.join('\n'))
     } catch (e) { return fail(e) }
