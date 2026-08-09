@@ -2,7 +2,7 @@
 
 MCP server for [apimodels.app](https://apimodels.app) — call **image, video, LLM chat and text-to-speech** models with one API key, from Claude Desktop, Cursor, or any MCP client.
 
-One key unlocks GPT-5.5, Claude, Gemini, GLM, DeepSeek, Qwen, Seedance, Veo, Kling, gpt-image-2, nanobanana, ElevenLabs and more — billed in USD, you only pay for successful generations.
+One key unlocks GPT-5.5, Claude, Gemini, GLM, DeepSeek, Qwen, Seedance, Veo, Kling, gpt-image-2, Gemini Image, MiniMax speech and more — billed in USD, you only pay for successful generations.
 
 ## Tools
 
@@ -12,7 +12,7 @@ One key unlocks GPT-5.5, Claude, Gemini, GLM, DeepSeek, Qwen, Seedance, Veo, Kli
 | `chat` | Chat / text completion with any LLM (`gpt-5-5`, `claude-opus-4-8`, `gemini-3-pro-preview`, …). |
 | `generate_image` | Text-to-image or image edit; returns the image URL(s). |
 | `generate_video` | Text-to-video (optional reference image); returns the video URL(s). |
-| `text_to_speech` | Text-to-speech; returns the audio URL. |
+| `text_to_speech` | Text-to-speech (MiniMax voices); returns the audio URL. ElevenLabs TTS is not exposed here — it streams raw bytes from `POST /v1/tts/stream` rather than returning a URL. |
 
 ## Setup
 
@@ -68,8 +68,8 @@ Any other MCP client works the same way — run `npx -y apimodels-mcp` over stdi
 ## Local development
 
 ```bash
-npm install
-npm run build
+pnpm install
+pnpm build
 APIMODELS_API_KEY=sk_... node dist/index.js   # runs over stdio
 ```
 

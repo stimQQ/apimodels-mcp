@@ -4,8 +4,15 @@
  *
  * Usage:
  *   APIMODELS_API_KEY=sk_... node generate.mjs --type image --prompt "a red fox" [--model gpt-image-2] [--aspect_ratio 1:1]
- *   APIMODELS_API_KEY=sk_... node generate.mjs --type video --prompt "a city timelapse" [--model seedance-2-fast] [--resolution 720p] [--duration 5]
- *   APIMODELS_API_KEY=sk_... node generate.mjs --type tts   --text   "hello world"  [--model eleven-tts-v3] [--voice_id ...]
+ *   APIMODELS_API_KEY=sk_... node generate.mjs --type video --prompt "a city timelapse" [--model seedance-2.0-fast] [--resolution 720p] [--duration 5]
+ *   APIMODELS_API_KEY=sk_... node generate.mjs --type tts   --text   "hello world"  [--model minimax-speech-02-turbo] [--voice_id ...]
+ *
+ * Model-name gotchas (both were live bugs here):
+ *   - video: the public names are dotted — `seedance-2.0-fast`, not `seedance-2-fast`.
+ *     The bare form is an internal name and the endpoint answers "Invalid model".
+ *   - tts: `/audio/generations` does NOT serve the `eleven-tts-*` models; those stream
+ *     from POST /v1/tts/stream instead. Use a minimax-speech-* model here, and note
+ *     MiniMax requires an explicit voice_id (GET /v1/minimax/voices lists them).
  *
  * Prints the resulting URL(s) to stdout, one per line.
  */
@@ -78,7 +85,7 @@ async function main() {
   } else if (type === 'video') {
     if (!a.prompt) throw new Error('--prompt is required for --type video')
     urls = await runAsyncTask('video', {
-      model: a.model || 'seedance-2-fast', prompt: a.prompt,
+      model: a.model || 'seedance-2.0-fast', prompt: a.prompt,
       ...(a.aspect_ratio ? { aspect_ratio: a.aspect_ratio } : {}),
       ...(a.resolution ? { resolution: a.resolution } : {}),
       ...(a.duration ? { duration: a.duration } : {}),
@@ -87,8 +94,8 @@ async function main() {
   } else if (type === 'tts') {
     if (!a.text) throw new Error('--text is required for --type tts')
     urls = await runAsyncTask('audio', {
-      model: a.model || 'eleven-tts-v3', text: a.text,
-      ...(a.voice_id ? { voice_id: a.voice_id } : {}),
+      model: a.model || 'minimax-speech-02-turbo', text: a.text,
+      voice_id: a.voice_id || 'English_Trustworthy_Man',
     })
   } else {
     throw new Error('--type must be one of: image, video, tts')

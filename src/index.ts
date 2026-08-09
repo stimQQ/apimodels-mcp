@@ -77,7 +77,7 @@ const server = new McpServer({ name: 'apimodels-mcp', version: '0.1.0' })
 
 server.tool(
   'list_models',
-  'List the model ids available on apimodels.app (chat, image, video, audio). Use the returned ids with the other tools.',
+  'List the model ids available on apimodels.app (chat, image, video, audio). Use the returned ids with the other tools. Caveat: a handful of entries are internal names that the generation endpoints reject (e.g. seedance-2-fast, seedance-2, motion-control) — the public alias is the dotted form, e.g. seedance-2.0-fast. If an id comes back "Invalid model", try the dotted variant before giving up.',
   {},
   async () => {
     try {
@@ -93,7 +93,7 @@ server.tool(
   'Chat / text completion with any LLM on apimodels.app (GPT-5.5, Claude, Gemini, GLM, DeepSeek, Qwen, …). Returns the assistant reply text.',
   {
     prompt: z.string().describe('The user message / prompt.'),
-    model: z.string().default('gpt-5-5').describe('Model id, e.g. gpt-5-5, claude-opus-4-8, gemini-3-pro-preview, deepseek-v4-pro.'),
+    model: z.string().default('gpt-5-5').describe('Model id, e.g. gpt-5-5, claude-opus-4-8, claude-sonnet-4-6, gemini-3-pro-preview, deepseek-v4-pro.'),
     system: z.string().optional().describe('Optional system prompt.'),
     max_tokens: z.number().int().positive().optional().describe('Optional max output tokens.'),
   },
@@ -115,10 +115,10 @@ server.tool(
 
 server.tool(
   'generate_image',
-  'Generate an image from a text prompt (or edit an input image). Returns the URL(s) of the generated image.',
+  'Generate an image from a text prompt (or edit an input image). Returns the URL(s) of the generated image, valid 7 days. Roughly $0.025 per image on the default model; gpt-image-2-lite is $0.008.',
   {
     prompt: z.string().describe('Text description of the image to generate.'),
-    model: z.string().default('gpt-image-2').describe('Image model id, e.g. gpt-image-2, gemini-3-pro-image-preview, gemini-2.5-flash-image.'),
+    model: z.string().default('gpt-image-2').describe('Image model id, e.g. gpt-image-2, gpt-image-2-lite (cheapest), gemini-3-pro-image, gemini-2.5-flash-image, doubao-seedream-4-5-251128.'),
     aspect_ratio: z.string().optional().describe('Optional aspect ratio, e.g. 1:1, 16:9, 9:16.'),
     resolution: z.string().optional().describe('Optional resolution, e.g. 1K, 2K, 4K.'),
     image_url: z.string().optional().describe('Optional input image URL for image-to-image edits.'),
@@ -138,10 +138,10 @@ server.tool(
 
 server.tool(
   'generate_video',
-  'Generate a video from a text prompt (and optional reference image). Polls until done and returns the video URL(s). May take a few minutes.',
+  'Generate a video from a text prompt (and optional reference image). Polls until done and returns the video URL(s), valid 7 days. May take a few minutes. Video is the most expensive modality here — the default model costs roughly $0.30-$0.50 per clip; pass model:"veo-3.1-fast-fhd" for the cheapest option at $0.07 flat.',
   {
     prompt: z.string().describe('Text description of the video.'),
-    model: z.string().default('seedance-2-fast').describe('Video model id, e.g. seedance-2-fast, seedance-2, veo3.1-4k, grok-video-3.'),
+    model: z.string().default('seedance-2.0-fast').describe('Video model id. Use the dotted public names: seedance-2.0-fast, seedance-2.0, seedance-2.5, veo-3.1-fast-fhd ($0.07 flat, cheapest), veo-3.1, grok-video-3, kling-v2-6, minimax-h3. The bare forms seedance-2-fast / seedance-2 are internal names and will 400.'),
     aspect_ratio: z.string().optional().describe('Optional aspect ratio, e.g. 16:9, 9:16, 1:1.'),
     resolution: z.string().optional().describe('Optional resolution, e.g. 480p, 720p, 1080p.'),
     duration: z.union([z.number(), z.string()]).optional().describe('Optional duration in seconds, e.g. 5 or 10.'),
@@ -161,19 +161,52 @@ server.tool(
   },
 )
 
+/**
+ * Text to speech.
+ *
+ * This tool used to default to `eleven-tts-v3` against `/audio/generations`, which
+ * cannot work: the ElevenLabs TTS models are served by `POST /v1/tts/stream`, and
+ * `/audio/generations` rejects every `eleven-tts-*` id outright
+ * ("Invalid model: eleven-tts-v3. Supported: kling-…, eleven-dialogue, …"). Every
+ * call 400'd.
+ *
+ * Of the two ways out, this tool stays on `/audio/generations` and moves to a model
+ * that endpoint actually serves. `/v1/tts/stream` returns raw audio BYTES, so an MCP
+ * server pointed at it has no URL to hand back — it would have to write a file and
+ * change what this tool returns, diverging from generate_image / generate_video.
+ * `/audio/generations` keeps the async-task-to-URL shape the rest of the server uses
+ * and takes exactly the parameters declared below.
+ *
+ * MiniMax requires an explicit voice_id (there is no server-side default), so one is
+ * baked in here — without it the "default path" would still fail, just with a
+ * different message. Voice ids come from GET /v1/minimax/voices.
+ */
 server.tool(
   'text_to_speech',
-  'Convert text to speech (ElevenLabs / MiniMax voices). Returns the audio file URL.',
+  'Convert text to speech (MiniMax voices). Returns the audio file URL (valid 7 days). Costs about $0.004 for a short line; billed at $0.04 per 1000 characters.',
   {
     text: z.string().describe('The text to speak.'),
-    model: z.string().default('eleven-tts-v3').describe('TTS model id, e.g. eleven-tts-v3, eleven-tts-v2.'),
-    voice_id: z.string().optional().describe('Optional voice id (omit for the model default).'),
+    model: z
+      .string()
+      .default('minimax-speech-02-turbo')
+      .describe(
+        'TTS model id, e.g. minimax-speech-02-turbo (fast), minimax-speech-02-hd / minimax-speech-2.8-hd (higher quality). Note: eleven-tts-* models are NOT available here — they stream from POST /v1/tts/stream instead.',
+      ),
+    voice_id: z
+      .string()
+      .default('English_Trustworthy_Man')
+      .describe(
+        'Voice id. English: English_Trustworthy_Man, English_Graceful_Lady, Serene_Woman. Chinese: male-qn-qingse, female-tianmei. Full list: GET /v1/minimax/voices.',
+      ),
+    speed: z.number().optional().describe('Optional speaking rate, 0.5-2 (1 = normal).'),
   },
-  async ({ text: tts, model, voice_id }) => {
+  async ({ text: tts, model, voice_id, speed }) => {
     try {
       const urls = await runAsyncTask('audio', {
-        model, text: tts,
-        ...(voice_id ? { voice_id } : {}),
+        model,
+        text: tts,
+        voice_id,
+        ...(speed != null ? { voice_setting: { voice_id, speed } } : {}),
       })
       return text(urls.join('\n'))
     } catch (e) { return fail(e) }
