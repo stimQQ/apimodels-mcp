@@ -8,7 +8,7 @@
  *
  * Config (environment variables):
  *   APIMODELS_API_KEY   (required)  your sk_… key from https://apimodels.app/console/api-keys
- *   APIMODELS_BASE_URL  (optional)  default https://apimodels.app/api/v1
+ *   APIMODELS_BASE_URL  (optional)  default https://api.apimodels.app/v1
  *   APIMODELS_TIMEOUT_MS(optional)  max ms to poll an async (image/video/audio) task, default 300000
  */
 
@@ -21,7 +21,7 @@ import { basename, join } from 'node:path'
 import { homedir } from 'node:os'
 
 const API_KEY = process.env.APIMODELS_API_KEY
-const BASE_URL = (process.env.APIMODELS_BASE_URL || 'https://apimodels.app/api/v1').replace(/\/$/, '')
+const BASE_URL = (process.env.APIMODELS_BASE_URL || 'https://api.apimodels.app/v1').replace(/\/$/, '')
 const POLL_TIMEOUT_MS = Number(process.env.APIMODELS_TIMEOUT_MS) || 300_000
 const POLL_INTERVAL_MS = 3_000
 
