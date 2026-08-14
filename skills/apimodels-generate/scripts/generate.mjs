@@ -17,7 +17,7 @@
  * Prints the resulting URL(s) to stdout, one per line.
  */
 
-const BASE_URL = (process.env.APIMODELS_BASE_URL || 'https://apimodels.app/api/v1').replace(/\/$/, '')
+const BASE_URL = (process.env.APIMODELS_BASE_URL || 'https://api.apimodels.app/v1').replace(/\/$/, '')
 const API_KEY = process.env.APIMODELS_API_KEY
 const TIMEOUT_MS = Number(process.env.APIMODELS_TIMEOUT_MS) || 300_000
 

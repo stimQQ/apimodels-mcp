@@ -79,7 +79,7 @@ Any other MCP client works the same way — run `npx -y apimodels-mcp` over stdi
 | Env var | Default | Description |
 |---------|---------|-------------|
 | `APIMODELS_API_KEY` | — (required) | Your `sk_…` key. |
-| `APIMODELS_BASE_URL` | `https://apimodels.app/api/v1` | API base URL. |
+| `APIMODELS_BASE_URL` | `https://api.apimodels.app/v1` | API base URL. |
 | `APIMODELS_TIMEOUT_MS` | `300000` | Max time to poll an async (image/video/audio) task. |
 
 ## Local development

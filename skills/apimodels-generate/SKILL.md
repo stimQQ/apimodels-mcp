@@ -47,12 +47,12 @@ APIMODELS_API_KEY=$APIMODELS_API_KEY node scripts/generate.mjs \
 ```
 
 - Common TTS models: `minimax-speech-02-turbo`, `minimax-speech-02-hd`, `minimax-speech-2.8-hd`.
-- `--voice_id` defaults to `English_Trustworthy_Man`. List all with `GET https://apimodels.app/api/v1/minimax/voices`.
+- `--voice_id` defaults to `English_Trustworthy_Man`. List all with `GET https://api.apimodels.app/v1/minimax/voices`.
 - The `eleven-tts-*` models are **not** reachable from this script: they stream raw audio from `POST /api/v1/tts/stream` rather than returning a task URL.
 
 ## Notes
 
 - The script prints result URL(s). Share them with the user, or download with `curl -O <url>`.
 - Result files are kept for **7 days**, then auto-deleted — download anything worth keeping.
-- To discover exact model ids, the user can browse <https://apimodels.app/models> or call `GET https://apimodels.app/api/v1/models`.
+- To discover exact model ids, the user can browse <https://apimodels.app/models> or call `GET https://api.apimodels.app/v1/models`.
 - To estimate cost before generating, point the user to the calculators at <https://apimodels.app/tools>.
