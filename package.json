@@ -1,6 +1,6 @@
 {
   "name": "apimodels-mcp",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "MCP server for apimodels.app — call image, video, LLM chat and text-to-speech models with one API key, from Claude Desktop, Cursor and any MCP client.",
   "type": "module",
   "license": "MIT",
@@ -9,7 +9,8 @@
     "apimodels-mcp": "dist/index.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "LICENSE"
   ],
   "keywords": [
     "mcp",
@@ -47,5 +48,13 @@
     "onlyBuiltDependencies": [
       "sharp"
     ]
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/stimQQ/apimodels-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/stimQQ/apimodels-mcp/issues"
+  },
+  "mcpName": "io.github.stimQQ/apimodels-mcp"
 }
