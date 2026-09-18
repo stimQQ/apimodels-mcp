@@ -25,18 +25,25 @@ const BASE_URL = (process.env.APIMODELS_BASE_URL || 'https://api.apimodels.app/v
 const POLL_TIMEOUT_MS = Number(process.env.APIMODELS_TIMEOUT_MS) || 300_000
 const POLL_INTERVAL_MS = 3_000
 
-if (!API_KEY) {
-  console.error('[apimodels-mcp] APIMODELS_API_KEY is not set. Get one at https://apimodels.app/console/api-keys')
-  process.exit(1)
+// Do NOT exit when the key is missing: directory scanners and MCP inspectors start
+// the server without credentials just to read the tool list. The key is checked
+// when a tool actually needs the API (requireKey below).
+const NO_KEY_MSG = 'APIMODELS_API_KEY is not set. Get a key at https://apimodels.app/console/api-keys and add it to this server\'s environment.'
+if (!API_KEY) console.error(`[apimodels-mcp] warning: ${NO_KEY_MSG}`)
+
+function requireKey(): string {
+  if (!API_KEY) throw new Error(NO_KEY_MSG)
+  return API_KEY
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
 async function apiFetch(path: string, init?: RequestInit): Promise<any> {
+  const key = requireKey()
   const res = await fetch(`${BASE_URL}${path}`, {
     ...init,
     headers: {
-      Authorization: `Bearer ${API_KEY}`,
+      Authorization: `Bearer ${key}`,
       'Content-Type': 'application/json',
       ...(init?.headers || {}),
     },
@@ -125,7 +132,7 @@ async function uploadBytes(buf: Buffer, filename: string, contentType: string): 
   // No Content-Type header here on purpose — fetch must set the multipart boundary.
   const res = await fetch(`${BASE_URL}/files`, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${API_KEY}` },
+    headers: { Authorization: `Bearer ${requireKey()}` },
     body: form,
   })
   const json: any = await res.json().catch(() => ({}))
@@ -210,7 +217,7 @@ const REVIEW_SYSTEM = [
 const text = (s: string) => ({ content: [{ type: 'text' as const, text: s }] })
 const fail = (e: unknown) => ({ content: [{ type: 'text' as const, text: `Error: ${e instanceof Error ? e.message : String(e)}` }], isError: true })
 
-const server = new McpServer({ name: 'apimodels-mcp', version: '0.2.1' })
+const server = new McpServer({ name: 'apimodels-mcp', version: '0.2.2' })
 
 server.tool(
   'list_models',
