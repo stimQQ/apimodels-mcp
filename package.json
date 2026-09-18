@@ -1,6 +1,6 @@
 {
   "name": "apimodels-mcp",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "MCP server for apimodels.app — call image, video, LLM chat and text-to-speech models with one API key, from Claude Desktop, Cursor and any MCP client.",
   "type": "module",
   "license": "MIT",
@@ -39,5 +39,13 @@
   },
   "engines": {
     "node": ">=18"
+  },
+  "optionalDependencies": {
+    "sharp": "^0.34.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "sharp"
+    ]
   }
 }

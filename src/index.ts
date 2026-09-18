@@ -159,10 +159,58 @@ async function runAsyncTask(kind: 'images' | 'video' | 'audio', body: Record<str
   throw new Error(`Timed out after ${Math.round(POLL_TIMEOUT_MS / 1000)}s (task ${taskId} still running). Results stay retrievable via the dashboard.`)
 }
 
+/**
+ * A downscaled JPEG of a generated image, so a client that forwards tool-result
+ * images to the model (Claude Desktop, Claude Code, Cursor) lets the model SEE
+ * what it made and iterate on it. Full-size results run 1–8 MB; resent on every
+ * turn that would swamp the context, so we cap the long edge at 1024px.
+ *
+ * sharp is an optionalDependency: if it failed to install on this platform we
+ * fall back to the original bytes when they are small enough, else no preview.
+ * Never throws — a missing preview must not fail a generation that succeeded
+ * (and was billed).
+ */
+const PREVIEW_MAX_EDGE = 1024
+const PREVIEW_RAW_LIMIT = 1_000_000
+
+async function imagePreview(url: string): Promise<{ data: string; mimeType: string } | null> {
+  try {
+    const res = await fetch(url)
+    if (!res.ok) return null
+    const buf = Buffer.from(await res.arrayBuffer())
+    try {
+      const mod = 'sharp' // indirect so tsc does not require the optional package
+      const sharp = (await import(mod)).default
+      const out: Buffer = await sharp(buf)
+        .rotate()
+        .resize({ width: PREVIEW_MAX_EDGE, height: PREVIEW_MAX_EDGE, fit: 'inside', withoutEnlargement: true })
+        .jpeg({ quality: 80 })
+        .toBuffer()
+      return { data: out.toString('base64'), mimeType: 'image/jpeg' }
+    } catch {
+      const mime = (res.headers.get('content-type') || guessMime(url)).split(';')[0].trim()
+      if (buf.length <= PREVIEW_RAW_LIMIT && /^image\/(png|jpeg|webp|gif)$/.test(mime)) {
+        return { data: buf.toString('base64'), mimeType: mime }
+      }
+      return null
+    }
+  } catch {
+    return null
+  }
+}
+
+const REVIEW_SYSTEM = [
+  'You are reviewing an AI-generated image against the brief it was generated from.',
+  'Look at the image carefully and answer in three short parts:',
+  '1. MATCHES — what the image gets right.',
+  '2. PROBLEMS — what is wrong or missing. Be concrete: misspelled or garbled text (quote it), wrong counts, composition, colors, anatomy, artifacts, aspect ratio.',
+  '3. REVISED PROMPT — one complete prompt that would fix the problems. If the image already satisfies the brief, say "No changes needed" instead.',
+].join('\n')
+
 const text = (s: string) => ({ content: [{ type: 'text' as const, text: s }] })
 const fail = (e: unknown) => ({ content: [{ type: 'text' as const, text: `Error: ${e instanceof Error ? e.message : String(e)}` }], isError: true })
 
-const server = new McpServer({ name: 'apimodels-mcp', version: '0.1.0' })
+const server = new McpServer({ name: 'apimodels-mcp', version: '0.2.0' })
 
 server.tool(
   'list_models',
@@ -204,15 +252,16 @@ server.tool(
 
 server.tool(
   'generate_image',
-  'Generate an image from a text prompt (or edit an input image). Returns the URL(s) of the generated image, valid 7 days. Roughly $0.025 per image on the default model; gpt-image-2-lite is $0.008.',
+  'Generate an image from a text prompt (or edit an input image). Returns the URL(s) of the generated image, valid 7 days, plus a downscaled preview of the image itself when the client can show tool-result images to you. If you cannot see the image in the result, call review_image with the returned URL to get a written critique and a revised prompt, then generate again. Roughly $0.025 per image on the default model; gpt-image-2-lite is $0.008.',
   {
     prompt: z.string().describe('Text description of the image to generate.'),
     model: z.string().default('gpt-image-2').describe('Image model id, e.g. gpt-image-2, gpt-image-2-lite (cheapest), gemini-3-pro-image, gemini-2.5-flash-image, doubao-seedream-4-5-251128.'),
     aspect_ratio: z.string().optional().describe('Optional aspect ratio, e.g. 1:1, 16:9, 9:16.'),
     resolution: z.string().optional().describe('Optional resolution, e.g. 1K, 2K, 4K.'),
     image_url: z.string().optional().describe('Optional input image for image-to-image edits. Accepts a public https:// URL, a LOCAL FILE PATH, a localhost URL, or a data: URI — local sources are uploaded for you automatically.'),
+    return_image: z.boolean().default(true).describe('Attach a downscaled preview (max 1024px JPEG) of the result so you can look at it. Set false to save context when you only need the URL.'),
   },
-  async ({ prompt, model, aspect_ratio, resolution, image_url }) => {
+  async ({ prompt, model, aspect_ratio, resolution, image_url, return_image }) => {
     try {
       const urls = await runAsyncTask('images', {
         model, prompt,
@@ -220,7 +269,44 @@ server.tool(
         ...(resolution ? { resolution } : {}),
         ...(image_url ? { image_url: await resolveImageInput(image_url) } : {}),
       })
-      return text(urls.join('\n'))
+      const previews = return_image ? await Promise.all(urls.slice(0, 2).map(imagePreview)) : []
+      return {
+        content: [
+          { type: 'text' as const, text: urls.join('\n') },
+          ...previews.flatMap((p) => (p ? [{ type: 'image' as const, data: p.data, mimeType: p.mimeType }] : [])),
+        ],
+      }
+    } catch (e) { return fail(e) }
+  },
+)
+
+server.tool(
+  'review_image',
+  'Have a vision model look at an image and critique it against a brief. Returns what matches, what is wrong (garbled text, composition, colors, artifacts) and a revised prompt. Use it after generate_image to check the result and decide whether to regenerate — this works in every MCP client, including ones that do not pass tool-result images to you. Costs one small vision chat call (well under $0.01 on the default model).',
+  {
+    image_url: z.string().describe('The image to review: a URL returned by generate_image, any public https:// URL, a LOCAL FILE PATH, a localhost URL, or a data: URI.'),
+    brief: z.string().describe('What the image is supposed to show — usually the prompt it was generated from, plus any requirements the user stated (exact text, aspect ratio, style).'),
+    model: z.string().default('gpt-5.6-luna').describe('Vision-capable chat model that does the looking. gpt-5.6-luna (default, cheapest) or claude-sonnet-5 for a more careful read.'),
+  },
+  async ({ image_url, brief, model }) => {
+    try {
+      const url = await resolveImageInput(image_url)
+      const res = await apiFetch('/chat/completions', {
+        method: 'POST',
+        body: JSON.stringify({
+          model,
+          max_tokens: 900,
+          messages: [
+            { role: 'system', content: REVIEW_SYSTEM },
+            { role: 'user', content: [
+              { type: 'text', text: `BRIEF:\n${brief}` },
+              { type: 'image_url', image_url: { url } },
+            ] },
+          ],
+        }),
+      })
+      const reply = res?.choices?.[0]?.message?.content
+      return text(typeof reply === 'string' && reply.trim() ? reply : JSON.stringify(res))
     } catch (e) { return fail(e) }
   },
 )

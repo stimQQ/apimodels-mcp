@@ -10,9 +10,19 @@ One key unlocks GPT-5.5, Claude, Gemini, GLM, DeepSeek, Qwen, Seedance, Veo, Kli
 |------|--------------|
 | `list_models` | List available model ids (chat / image / video / audio). |
 | `chat` | Chat / text completion with any LLM (`gpt-5-5`, `claude-opus-4-8`, `gemini-3-pro-preview`, …). |
-| `generate_image` | Text-to-image or image edit; returns the image URL(s). |
+| `generate_image` | Text-to-image or image edit; returns the image URL(s) plus a downscaled preview the model can look at. |
+| `review_image` | A vision model critiques an image against your brief and proposes a revised prompt. |
 | `generate_video` | Text-to-video (optional reference image); returns the video URL(s). |
 | `text_to_speech` | Text-to-speech (MiniMax voices); returns the audio URL. ElevenLabs TTS is not exposed here — it streams raw bytes from `POST /v1/tts/stream` rather than returning a URL. |
+
+### The model can check its own work
+
+Ask for an image and let the assistant iterate until it is right — "make a 16:9 banner that says SAVE 10%, check the spelling, fix it if needed":
+
+1. `generate_image` returns the URL **and a preview of the image itself** (max 1024px JPEG). Clients that pass tool-result images to the model — Claude Desktop, Claude Code, Cursor — let it see what it made. Pass `return_image: false` to skip the preview.
+2. `review_image` works everywhere, including clients that show tool-result images to you but not to the model (Cherry Studio is one). It sends the image and your brief to a vision model and returns what matches, what is wrong (garbled text, composition, aspect ratio, artifacts) and a revised prompt. One review costs well under $0.01 on the default `gpt-5.6-luna`.
+
+The assistant picks `aspect_ratio` and `resolution` itself from what you ask for, so "make it 16:9" in plain words is enough.
 
 ### Local images just work
 
@@ -71,6 +81,16 @@ Restart Claude Desktop. You can now ask it to "generate an image of …" or "mak
   }
 }
 ```
+
+### Cherry Studio
+
+In `Settings → MCP Servers`, add a new server of type **stdio**:
+
+- Command: `npx`
+- Arguments: `-y apimodels-mcp`
+- Environment variables: `APIMODELS_API_KEY=sk_your_key_here`
+
+Enable the server, then select it for your conversation from the MCP control under the chat box. Use a chat model that supports tool calls (Claude, GPT, Gemini …) as the conversation model — it calls the image model for you. Cherry Studio needs Node.js installed for `npx`; on Windows install it from <https://nodejs.org>.
 
 Any other MCP client works the same way — run `npx -y apimodels-mcp` over stdio with `APIMODELS_API_KEY` in the environment.
 
