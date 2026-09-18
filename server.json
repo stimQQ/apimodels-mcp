@@ -1,0 +1,41 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.stimQQ/apimodels-mcp",
+  "title": "apimodels",
+  "description": "Image, video, chat and speech models with one API key. The model can review its own images.",
+  "repository": {
+    "url": "https://github.com/stimQQ/apimodels-mcp",
+    "source": "github"
+  },
+  "websiteUrl": "https://apimodels.app",
+  "version": "0.2.1",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "apimodels-mcp",
+      "version": "0.2.1",
+      "transport": { "type": "stdio" },
+      "environmentVariables": [
+        {
+          "name": "APIMODELS_API_KEY",
+          "description": "Your sk_… API key from https://apimodels.app/console/api-keys",
+          "isRequired": true,
+          "isSecret": true,
+          "format": "string"
+        },
+        {
+          "name": "APIMODELS_BASE_URL",
+          "description": "API base URL. Default https://api.apimodels.app/v1",
+          "isRequired": false,
+          "format": "string"
+        },
+        {
+          "name": "APIMODELS_TIMEOUT_MS",
+          "description": "Max milliseconds to wait for an image / video / audio task. Default 300000",
+          "isRequired": false,
+          "format": "string"
+        }
+      ]
+    }
+  ]
+}
