@@ -217,7 +217,7 @@ const REVIEW_SYSTEM = [
 const text = (s: string) => ({ content: [{ type: 'text' as const, text: s }] })
 const fail = (e: unknown) => ({ content: [{ type: 'text' as const, text: `Error: ${e instanceof Error ? e.message : String(e)}` }], isError: true })
 
-const server = new McpServer({ name: 'apimodels-mcp', version: '0.2.2' })
+const server = new McpServer({ name: 'apimodels-mcp', version: '0.2.3' })
 
 server.tool(
   'list_models',

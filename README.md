@@ -94,6 +94,17 @@ Enable the server, then select it for your conversation from the MCP control und
 
 Any other MCP client works the same way — run `npx -y apimodels-mcp` over stdio with `APIMODELS_API_KEY` in the environment.
 
+## Models, docs and pricing
+
+Everything the tools call is documented on apimodels.app:
+
+- [API documentation](https://apimodels.app/docs) · [pricing](https://apimodels.app/pricing) · [full model catalog](https://apimodels.app/models)
+- Image: [GPT Image 2.5 API](https://apimodels.app/docs/gpt-image-2-5) ([model page](https://apimodels.app/models/gpt-image-2.5-flare)), [GPT Image 2 API](https://apimodels.app/docs/gpt-image-2), [all image models](https://apimodels.app/docs/image)
+- Video: [Seedance 2.5 API](https://apimodels.app/docs/seedance-2-5), [Google Veo API](https://apimodels.app/docs/google-veo), [MiniMax H3 API](https://apimodels.app/docs/minimax-h3), [FlashVSR video upscaling](https://apimodels.app/docs/flashvsr)
+- Chat and speech: [LLM API (GPT, Claude, Gemini, DeepSeek, GLM, Qwen)](https://apimodels.app/docs/llm), [audio and text-to-speech](https://apimodels.app/docs/audio)
+- Other ways in: [Claude Code setup](https://apimodels.app/docs/claude-code), [chat clients](https://apimodels.app/docs/clients), [Agent Skills](https://apimodels.app/docs/skills), [free calculators and tools](https://apimodels.app/tools)
+- Prompt libraries with example outputs: [GPT Image 2.5 prompts](https://apimodels.app/gpt-image-2-5-prompts), [GPT Image 2 prompts](https://apimodels.app/gpt-image-2-prompts), [Seedance 2.5 prompts](https://apimodels.app/seedance-2-5-prompts), [MiniMax H3 prompts](https://apimodels.app/minimax-h3-prompts)
+
 ## Configuration
 
 | Env var | Default | Description |
