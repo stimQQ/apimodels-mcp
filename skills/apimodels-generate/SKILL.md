@@ -16,7 +16,15 @@ If `APIMODELS_API_KEY` is not set, ask the user to export it before continuing.
 
 ## How to use
 
-Run the bundled script `scripts/generate.mjs`. It submits the job, polls until it finishes, and prints the resulting URL(s) to stdout (one per line). Video can take a few minutes.
+Run the bundled script `scripts/generate.mjs`. It submits the job, waits up to `--wait` seconds (default 50), and prints the resulting URL(s) to stdout (one per line).
+
+If the task is not finished in time the script prints `TASK_ID=<id> STATE=running` and exits with code 2. **Do not run the generate command again** — the task keeps running and is billed once, when it completes. Resume with:
+
+```bash
+APIMODELS_API_KEY=$APIMODELS_API_KEY node scripts/generate.mjs --task_id <id> --wait 100
+```
+
+Repeat until it prints a URL. Images take about 50 seconds; video takes a median 2.5 minutes and 9 in 10 finish within 8 minutes, so expect two or three resumes for video. Keep `--wait` under your shell tool's timeout (Claude Code's Bash tool defaults to 2 minutes).
 
 ### Generate an image
 

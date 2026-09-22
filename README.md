@@ -12,8 +12,18 @@ One key unlocks GPT-5.5, Claude, Gemini, GLM, DeepSeek, Qwen, Seedance, Veo, Kli
 | `chat` | Chat / text completion with any LLM (`gpt-5-5`, `claude-opus-4-8`, `gemini-3-pro-preview`, …). |
 | `generate_image` | Text-to-image or image edit; returns the image URL(s) plus a downscaled preview the model can look at. |
 | `review_image` | A vision model critiques an image against your brief and proposes a revised prompt. |
-| `generate_video` | Text-to-video (optional reference image); returns the video URL(s). |
+| `generate_video` | Text-to-video (optional reference image); returns the video URL(s), or a task id if it is not done within `wait_seconds`. |
+| `get_task` | Wait for / check on a task that `generate_image`, `generate_video` or `text_to_speech` handed back as still running. |
 | `text_to_speech` | Text-to-speech (MiniMax voices); returns the audio URL. ElevenLabs TTS is not exposed here — it streams raw bytes from `POST /v1/tts/stream` rather than returning a URL. |
+
+### Long generations do not get lost
+
+Every generation is asynchronous on apimodels, and video is slow: a median of about 2.5 minutes, 9 in 10 within 8 minutes (production, week to 2026-09-22). Images take about 50 seconds. Meanwhile Codex aborts an MCP tool call after 60 seconds by default, and the MCP SDK's own client timeout is 60 seconds too. A tool that blocks until the video is ready therefore gets killed mid-wait — the task keeps running, the account is billed when it finishes, and the assistant never sees the URL. Versions up to 0.2.x did exactly that.
+
+Since 0.3.0 the generation tools wait at most `wait_seconds` (default 50) and then return the task id with a "still running" note; the assistant calls `get_task`, which waits up to another `wait_seconds` and returns the URL(s) — with the image preview for image tasks — or "still running" again. Nothing is resubmitted and nothing is billed twice. The assistant does this on its own; you just ask for the video.
+
+- **Codex**: keep the default. Or raise `tool_timeout_sec` for this server in `config.toml` and pass a larger `wait_seconds`.
+- **Claude Code / Claude Desktop / Cursor**: no 60-second limit, so `wait_seconds: 600` on `generate_video` gets the URL in one call. `APIMODELS_WAIT_SECONDS=600` in the server's env makes that the default.
 
 ### The model can check its own work
 
@@ -82,6 +92,21 @@ Restart Claude Desktop. You can now ask it to "generate an image of …" or "mak
 }
 ```
 
+### Codex CLI
+
+Add to `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.apimodels]
+command = "npx"
+args = ["-y", "apimodels-mcp"]
+env = { APIMODELS_API_KEY = "sk_your_key_here" }
+# Optional. Codex aborts a tool call after 60 s by default; the tools stay under that
+# on their own (see "Long generations do not get lost"), so this is only needed if you
+# want generate_video to return the URL in one call — then also pass wait_seconds: 600.
+# tool_timeout_sec = 660
+```
+
 ### Cherry Studio
 
 In `Settings → MCP Servers`, add a new server of type **stdio**:
@@ -111,7 +136,8 @@ Everything the tools call is documented on apimodels.app:
 |---------|---------|-------------|
 | `APIMODELS_API_KEY` | — (required) | Your `sk_…` key. |
 | `APIMODELS_BASE_URL` | `https://api.apimodels.app/v1` | API base URL. |
-| `APIMODELS_TIMEOUT_MS` | `300000` | Max time to poll an async (image/video/audio) task. |
+| `APIMODELS_WAIT_SECONDS` | `50` | Default `wait_seconds` for `generate_image`, `generate_video`, `text_to_speech` and `get_task`: how long a call waits before handing back a task id. Max 900. |
+| `APIMODELS_TIMEOUT_MS` | — | Deprecated (0.2.x): the same wait in milliseconds. Still honoured if set. |
 
 ## Local development
 

@@ -8,13 +8,15 @@
     "source": "github"
   },
   "websiteUrl": "https://apimodels.app",
-  "version": "0.2.3",
+  "version": "0.3.0",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "apimodels-mcp",
-      "version": "0.2.3",
-      "transport": { "type": "stdio" },
+      "version": "0.3.0",
+      "transport": {
+        "type": "stdio"
+      },
       "environmentVariables": [
         {
           "name": "APIMODELS_API_KEY",
@@ -30,8 +32,14 @@
           "format": "string"
         },
         {
+          "name": "APIMODELS_WAIT_SECONDS",
+          "description": "Default wait_seconds for generate_image / generate_video / text_to_speech / get_task before they hand back a task id. Default 50 (Codex aborts tool calls at 60 s).",
+          "isRequired": false,
+          "format": "string"
+        },
+        {
           "name": "APIMODELS_TIMEOUT_MS",
-          "description": "Max milliseconds to wait for an image / video / audio task. Default 300000",
+          "description": "Deprecated: same wait in milliseconds, honoured for old configs.",
           "isRequired": false,
           "format": "string"
         }

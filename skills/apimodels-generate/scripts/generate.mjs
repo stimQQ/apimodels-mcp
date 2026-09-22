@@ -15,11 +15,19 @@
  *     MiniMax requires an explicit voice_id (GET /v1/minimax/voices lists them).
  *
  * Prints the resulting URL(s) to stdout, one per line.
+ *
+ * Waiting (0.3.0): the script waits at most --wait seconds (default 50). If the task is
+ * still running it prints `TASK_ID=<id> STATE=running` and exits 2; resume with
+ *   node generate.mjs --task_id <id> [--wait 120]
+ * Why: this script runs inside an agent's shell tool, and Claude Code's Bash tool kills a
+ * command after 2 minutes by default while video takes a median 2.5 min (p90 8 min). The
+ * old "poll for up to 5 minutes" lost the URL of a task that then completed and was billed.
  */
 
 const BASE_URL = (process.env.APIMODELS_BASE_URL || 'https://api.apimodels.app/v1').replace(/\/$/, '')
 const API_KEY = process.env.APIMODELS_API_KEY
-const TIMEOUT_MS = Number(process.env.APIMODELS_TIMEOUT_MS) || 300_000
+const DEFAULT_WAIT_S = Number(process.env.APIMODELS_WAIT_SECONDS)
+  || Math.round((Number(process.env.APIMODELS_TIMEOUT_MS) || 0) / 1000) || 50
 
 if (!API_KEY) {
   console.error('APIMODELS_API_KEY is not set. Get one at https://apimodels.app/console/api-keys')
@@ -51,28 +59,48 @@ async function apiFetch(path, init) {
   return json
 }
 
-async function runAsyncTask(kind, body) {
+async function submitTask(kind, body) {
   const created = await apiFetch(`/${kind}/generations`, { method: 'POST', body: JSON.stringify(body) })
   const taskId = created?.data?.taskId
   if (!taskId) throw new Error(`No taskId returned: ${JSON.stringify(created)}`)
-  const deadline = Date.now() + TIMEOUT_MS
-  while (Date.now() < deadline) {
-    await sleep(3000)
+  return taskId
+}
+
+/**
+ * Wait up to waitS seconds for the task. Task lookup is by id alone on the server, so any
+ * of the three endpoints answers for any task — `kind` only picks the path.
+ * Returns the URL list when done; prints the resume line and exits 2 if still running.
+ */
+async function waitForTask(kind, taskId, waitS) {
+  const deadline = Date.now() + waitS * 1000
+  for (;;) {
     const polled = await apiFetch(`/${kind}/generations?task_id=${encodeURIComponent(taskId)}`)
-    const state = polled?.data?.state
-    if (state === 'completed') {
-      const urls = polled?.data?.resultUrls || []
-      if (!urls.length) throw new Error('Completed but no result URLs')
+    const d = polled?.data || {}
+    if (d.state === 'completed') {
+      const urls = d.resultUrls || []
+      if (!urls.length) throw new Error(`Task ${taskId} completed but no result URLs`)
       return urls
     }
-    if (state === 'failed') throw new Error(`Generation failed: ${polled?.data?.failMsg || polled?.data?.failCode || 'unknown'}`)
+    if (d.state === 'failed') throw new Error(`Generation failed (task ${taskId}, not billed): ${d.failMsg || d.failCode || 'unknown'}`)
+    const remaining = deadline - Date.now()
+    if (remaining <= 0) {
+      console.log(`TASK_ID=${taskId} STATE=running`)
+      console.error(`Still running after ${waitS}s. Resume with: node generate.mjs --task_id ${taskId} --wait 120  (do not resubmit; it is billed once, on completion)`)
+      process.exit(2)
+    }
+    await sleep(Math.min(3000, remaining))
   }
-  throw new Error(`Timed out after ${Math.round(TIMEOUT_MS / 1000)}s (task ${taskId} still running)`)
 }
 
 async function main() {
   const a = parseArgs(process.argv.slice(2))
   const type = a.type
+  const waitS = a.wait != null ? Number(a.wait) : DEFAULT_WAIT_S
+  if (!Number.isFinite(waitS) || waitS < 0) throw new Error('--wait must be a number of seconds')
+  if (a.task_id) {
+    console.log((await waitForTask('video', String(a.task_id).trim(), waitS)).join('\n'))
+    return
+  }
   let urls
 
 /**
@@ -126,29 +154,32 @@ async function uploadBytes(buf, filename, contentType) {
 
   if (type === 'image') {
     if (!a.prompt) throw new Error('--prompt is required for --type image')
-    urls = await runAsyncTask('images', {
+    const id = await submitTask('images', {
       model: a.model || 'gpt-image-2', prompt: a.prompt,
       ...(a.aspect_ratio ? { aspect_ratio: a.aspect_ratio } : {}),
       ...(a.resolution ? { resolution: a.resolution } : {}),
       ...(a.image_url ? { image_url: await resolveImageInput(a.image_url) } : {}),
     })
+    urls = await waitForTask('images', id, waitS)
   } else if (type === 'video') {
     if (!a.prompt) throw new Error('--prompt is required for --type video')
-    urls = await runAsyncTask('video', {
+    const id = await submitTask('video', {
       model: a.model || 'seedance-2.0-fast', prompt: a.prompt,
       ...(a.aspect_ratio ? { aspect_ratio: a.aspect_ratio } : {}),
       ...(a.resolution ? { resolution: a.resolution } : {}),
       ...(a.duration ? { duration: a.duration } : {}),
       ...(a.image_url ? { images: [await resolveImageInput(a.image_url)] } : {}),
     })
+    urls = await waitForTask('video', id, waitS)
   } else if (type === 'tts') {
     if (!a.text) throw new Error('--text is required for --type tts')
-    urls = await runAsyncTask('audio', {
+    const id = await submitTask('audio', {
       model: a.model || 'minimax-speech-02-turbo', text: a.text,
       voice_id: a.voice_id || 'English_Trustworthy_Man',
     })
+    urls = await waitForTask('audio', id, waitS)
   } else {
-    throw new Error('--type must be one of: image, video, tts')
+    throw new Error('--type must be one of: image, video, tts (or --task_id <id> to resume)')
   }
   console.log(urls.join('\n'))
 }

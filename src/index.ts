@@ -7,9 +7,20 @@
  * single API key.
  *
  * Config (environment variables):
- *   APIMODELS_API_KEY   (required)  your sk_… key from https://apimodels.app/console/api-keys
- *   APIMODELS_BASE_URL  (optional)  default https://api.apimodels.app/v1
- *   APIMODELS_TIMEOUT_MS(optional)  max ms to poll an async (image/video/audio) task, default 300000
+ *   APIMODELS_API_KEY       (required)  your sk_… key from https://apimodels.app/console/api-keys
+ *   APIMODELS_BASE_URL      (optional)  default https://api.apimodels.app/v1
+ *   APIMODELS_WAIT_SECONDS  (optional)  default wait_seconds for generate_* / get_task, default 50
+ *   APIMODELS_TIMEOUT_MS    (deprecated) the same wait in milliseconds; honoured for old configs
+ *
+ * Why generation is two-step (0.3.0):
+ *   generate_image / generate_video / text_to_speech submit the job and wait at most
+ *   wait_seconds for it. If it is still running they return the task id and the agent
+ *   calls get_task. Up to 0.2.x they blocked for up to 5 minutes, which lost results in
+ *   two ways: Codex kills a tool call after 60 s by default (tool_timeout_sec), and the
+ *   5-minute cap was below what video actually takes (production p50 142 s, p90 486 s,
+ *   week to 2026-09-22). Either way the task kept running, the account was billed on
+ *   success, and the agent never saw the URL. The default of 50 s keeps a single call
+ *   inside Codex's limit; Claude Code allows hours, so pass a larger wait_seconds there.
  */
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
@@ -22,7 +33,14 @@ import { homedir } from 'node:os'
 
 const API_KEY = process.env.APIMODELS_API_KEY
 const BASE_URL = (process.env.APIMODELS_BASE_URL || 'https://api.apimodels.app/v1').replace(/\/$/, '')
-const POLL_TIMEOUT_MS = Number(process.env.APIMODELS_TIMEOUT_MS) || 300_000
+/** Longest a single tool call may wait. Claude Code's stdio idle limit is 30 min; stay well under it. */
+const MAX_WAIT_S = 900
+const DEFAULT_WAIT_S = Math.min(
+  MAX_WAIT_S,
+  Number(process.env.APIMODELS_WAIT_SECONDS)
+    || Math.round((Number(process.env.APIMODELS_TIMEOUT_MS) || 0) / 1000)
+    || 50,
+)
 const POLL_INTERVAL_MS = 3_000
 
 // Do NOT exit when the key is missing: directory scanners and MCP inspectors start
@@ -143,27 +161,87 @@ async function uploadBytes(buf: Buffer, filename: string, contentType: string): 
   return url
 }
 
-/** Submit an async generation (image/video/audio), then poll until it finishes. */
-async function runAsyncTask(kind: 'images' | 'video' | 'audio', body: Record<string, unknown>): Promise<string[]> {
+type Kind = 'images' | 'video' | 'audio'
+const KIND_LABEL: Record<Kind, string> = { images: 'image', video: 'video', audio: 'audio' }
+
+/**
+ * Production generation times (seconds) for the 7 days to 2026-09-22, successful tasks
+ * only. Quoted back to the agent when a task is still running so its next wait is sized
+ * from data rather than guessed. Refresh when the fleet changes materially.
+ */
+const TYPICAL_S: Record<Kind, { p50: number; p90: number }> = {
+  images: { p50: 48, p90: 83 },
+  video: { p50: 142, p90: 486 },
+  audio: { p50: 3, p90: 9 },
+}
+
+/** Submit an async generation and return its task id. Billing happens on completion, not here. */
+async function submitTask(kind: Kind, body: Record<string, unknown>): Promise<string> {
   const created = await apiFetch(`/${kind}/generations`, { method: 'POST', body: JSON.stringify(body) })
   const taskId: string | undefined = created?.data?.taskId
   if (!taskId) throw new Error(`No taskId returned: ${JSON.stringify(created)}`)
+  return taskId
+}
 
-  const deadline = Date.now() + POLL_TIMEOUT_MS
-  while (Date.now() < deadline) {
-    await sleep(POLL_INTERVAL_MS)
+type TaskState =
+  | { state: 'completed'; urls: string[]; kind: Kind }
+  | { state: 'failed'; message: string; retryable: boolean; kind: Kind }
+  | { state: 'running'; elapsedS: number; kind: Kind }
+
+/**
+ * The API's modelType (TEXT_TO_IMAGE, IMAGE_TO_VIDEO, TEXT_TO_SPEECH, …) says what a
+ * task is regardless of which endpoint was asked — task lookup is by id alone on the
+ * server, so get_task does not need the caller to remember the kind. VIDEO is tested
+ * first because IMAGE_TO_VIDEO contains both words.
+ */
+function kindOf(modelType: unknown, fallback: Kind): Kind {
+  const t = typeof modelType === 'string' ? modelType : ''
+  if (t.includes('VIDEO')) return 'video'
+  if (t.includes('IMAGE')) return 'images'
+  if (t.includes('SPEECH') || t.includes('AUDIO')) return 'audio'
+  return fallback
+}
+
+/**
+ * Poll a task for up to waitS seconds. Returns 'running' instead of throwing when time
+ * runs out: that is a normal outcome the agent must act on (call get_task), not an error.
+ * waitS = 0 checks once and returns.
+ */
+async function pollTask(kind: Kind, taskId: string, waitS: number): Promise<TaskState> {
+  const deadline = Date.now() + waitS * 1000
+  for (;;) {
     const polled = await apiFetch(`/${kind}/generations?task_id=${encodeURIComponent(taskId)}`)
-    const state: string = polled?.data?.state
-    if (state === 'completed') {
-      const urls: string[] = polled?.data?.resultUrls || []
-      if (!urls.length) throw new Error('Task completed but returned no result URLs')
-      return urls
+    const d = polled?.data ?? {}
+    const k = kindOf(d.modelType, kind)
+    if (d.state === 'completed') {
+      const urls: string[] = d.resultUrls || []
+      if (!urls.length) throw new Error(`Task ${taskId} completed but returned no result URLs`)
+      return { state: 'completed', urls, kind: k }
     }
-    if (state === 'failed') {
-      throw new Error(`Generation failed: ${polled?.data?.failMsg || polled?.data?.failCode || 'unknown error'}`)
+    if (d.state === 'failed') {
+      return { state: 'failed', message: d.failMsg || d.failCode || 'unknown error', retryable: Boolean(d.retryable), kind: k }
     }
+    const remaining = deadline - Date.now()
+    if (remaining <= 0) {
+      const created = typeof d.createTime === 'number' ? d.createTime : Date.now()
+      return { state: 'running', elapsedS: Math.max(0, Math.round((Date.now() - created) / 1000)), kind: k }
+    }
+    await sleep(Math.min(POLL_INTERVAL_MS, remaining))
   }
-  throw new Error(`Timed out after ${Math.round(POLL_TIMEOUT_MS / 1000)}s (task ${taskId} still running). Results stay retrievable via the dashboard.`)
+}
+
+/** What the agent gets when a task has not finished inside the wait: enough to continue, nothing to guess. */
+function runningText(taskId: string, s: Extract<TaskState, { state: 'running' }>): string {
+  const t = TYPICAL_S[s.kind]
+  return [
+    `STILL RUNNING — ${KIND_LABEL[s.kind]} task ${taskId}, ${s.elapsedS}s elapsed.`,
+    `Typical ${KIND_LABEL[s.kind]} generation: median ${t.p50}s, 9 in 10 finish within ${t.p90}s.`,
+    `Next: call get_task with task_id "${taskId}" (it waits up to wait_seconds, default ${DEFAULT_WAIT_S}). Do NOT submit the job again — this task keeps running, is billed once when it completes, and its result stays retrievable for 7 days.`,
+  ].join('\n')
+}
+
+function failedText(taskId: string, s: Extract<TaskState, { state: 'failed' }>): string {
+  return `FAILED — ${KIND_LABEL[s.kind]} task ${taskId}: ${s.message}${s.retryable ? ' (transient; retrying the same request is reasonable)' : ''}. Failed tasks are not billed.`
 }
 
 /**
@@ -217,7 +295,25 @@ const REVIEW_SYSTEM = [
 const text = (s: string) => ({ content: [{ type: 'text' as const, text: s }] })
 const fail = (e: unknown) => ({ content: [{ type: 'text' as const, text: `Error: ${e instanceof Error ? e.message : String(e)}` }], isError: true })
 
-const server = new McpServer({ name: 'apimodels-mcp', version: '0.2.3' })
+/** Result URLs, plus previews for image tasks when asked. Shared by generate_image and get_task. */
+async function taskResult(taskId: string, s: TaskState, returnImage: boolean) {
+  if (s.state === 'running') return text(runningText(taskId, s))
+  if (s.state === 'failed') return { ...text(failedText(taskId, s)), isError: true }
+  const previews = returnImage && s.kind === 'images' ? await Promise.all(s.urls.slice(0, 2).map(imagePreview)) : []
+  return {
+    content: [
+      { type: 'text' as const, text: s.urls.join('\n') },
+      ...previews.flatMap((p) => (p ? [{ type: 'image' as const, data: p.data, mimeType: p.mimeType }] : [])),
+    ],
+  }
+}
+
+const waitSecondsParam = (what: string) =>
+  z.number().int().min(0).max(MAX_WAIT_S).default(DEFAULT_WAIT_S).describe(
+    `How long to wait for the ${what} before returning a task id instead (seconds, 0–${MAX_WAIT_S}). Default ${DEFAULT_WAIT_S}: Codex aborts tool calls at 60 s unless tool_timeout_sec is raised. In Claude Code / Claude Desktop you can pass up to ${MAX_WAIT_S} to get the URL in one call.`,
+  )
+
+const server = new McpServer({ name: 'apimodels-mcp', version: '0.3.0' })
 
 server.tool(
   'list_models',
@@ -259,7 +355,7 @@ server.tool(
 
 server.tool(
   'generate_image',
-  'Generate an image from a text prompt (or edit an input image). Returns the URL(s) of the generated image, valid 7 days, plus a downscaled preview of the image itself when the client can show tool-result images to you. If you cannot see the image in the result, call review_image with the returned URL to get a written critique and a revised prompt, then generate again. Roughly $0.025 per image on the default model; gpt-image-2-lite is $0.008.',
+  'Generate an image from a text prompt (or edit an input image). Returns the URL(s) of the generated image, valid 7 days, plus a downscaled preview of the image itself when the client can show tool-result images to you. Images take about 50 s (9 in 10 within 90 s); if the task is still running when wait_seconds is up you get a task id — call get_task with it, do not resubmit. If you cannot see the image in the result, call review_image with the returned URL to get a written critique and a revised prompt, then generate again. Roughly $0.025 per image on the default model; gpt-image-2-lite is $0.008.',
   {
     prompt: z.string().describe('Text description of the image to generate.'),
     model: z.string().default('gpt-image-2').describe('Image model id, e.g. gpt-image-2, gpt-image-2-lite (cheapest), gemini-3-pro-image, gemini-2.5-flash-image, doubao-seedream-4-5-251128.'),
@@ -267,22 +363,17 @@ server.tool(
     resolution: z.string().optional().describe('Optional resolution, e.g. 1K, 2K, 4K.'),
     image_url: z.string().optional().describe('Optional input image for image-to-image edits. Accepts a public https:// URL, a LOCAL FILE PATH, a localhost URL, or a data: URI — local sources are uploaded for you automatically.'),
     return_image: z.boolean().default(true).describe('Attach a downscaled preview (max 1024px JPEG) of the result so you can look at it. Set false to save context when you only need the URL.'),
+    wait_seconds: waitSecondsParam('image'),
   },
-  async ({ prompt, model, aspect_ratio, resolution, image_url, return_image }) => {
+  async ({ prompt, model, aspect_ratio, resolution, image_url, return_image, wait_seconds }) => {
     try {
-      const urls = await runAsyncTask('images', {
+      const taskId = await submitTask('images', {
         model, prompt,
         ...(aspect_ratio ? { aspect_ratio } : {}),
         ...(resolution ? { resolution } : {}),
         ...(image_url ? { image_url: await resolveImageInput(image_url) } : {}),
       })
-      const previews = return_image ? await Promise.all(urls.slice(0, 2).map(imagePreview)) : []
-      return {
-        content: [
-          { type: 'text' as const, text: urls.join('\n') },
-          ...previews.flatMap((p) => (p ? [{ type: 'image' as const, data: p.data, mimeType: p.mimeType }] : [])),
-        ],
-      }
+      return await taskResult(taskId, await pollTask('images', taskId, wait_seconds), return_image)
     } catch (e) { return fail(e) }
   },
 )
@@ -320,7 +411,7 @@ server.tool(
 
 server.tool(
   'generate_video',
-  'Generate a video from a text prompt (and optional reference image). Polls until done and returns the video URL(s), valid 7 days. May take a few minutes. Video is the most expensive modality here — the default model costs roughly $0.30-$0.50 per clip; pass model:"veo-3.1-fast-fhd" for the cheapest option at $0.07 flat.',
+  'Generate a video from a text prompt (and optional reference image). Submits the job and waits up to wait_seconds: returns the video URL(s) (valid 7 days) if it finishes in time, otherwise a task id — then call get_task with that id; never resubmit a running task. Video takes a median 2.5 minutes and 9 in 10 finish within 8 minutes, so expect one or two get_task calls. Video is the most expensive modality here — the default model costs roughly $0.30-$0.50 per clip; pass model:"veo-3.1-fast-fhd" for the cheapest option at $0.07 flat.',
   {
     prompt: z.string().describe('Text description of the video.'),
     model: z.string().default('seedance-2.0-fast').describe('Video model id. Use the dotted public names: seedance-2.0-fast, seedance-2.0, seedance-2.5, veo-3.1-fast-fhd ($0.07 flat, cheapest), veo-3.1, grok-video-3, kling-v2-6, minimax-h3. The bare forms seedance-2-fast / seedance-2 are internal names and will 400.'),
@@ -328,17 +419,34 @@ server.tool(
     resolution: z.string().optional().describe('Optional resolution, e.g. 480p, 720p, 1080p.'),
     duration: z.union([z.number(), z.string()]).optional().describe('Optional duration in seconds, e.g. 5 or 10.'),
     image_url: z.string().optional().describe('Optional first-frame / reference image for image-to-video. Accepts a public https:// URL, a LOCAL FILE PATH, a localhost URL, or a data: URI — local sources are uploaded for you automatically.'),
+    wait_seconds: waitSecondsParam('video'),
   },
-  async ({ prompt, model, aspect_ratio, resolution, duration, image_url }) => {
+  async ({ prompt, model, aspect_ratio, resolution, duration, image_url, wait_seconds }) => {
     try {
-      const urls = await runAsyncTask('video', {
+      const taskId = await submitTask('video', {
         model, prompt,
         ...(aspect_ratio ? { aspect_ratio } : {}),
         ...(resolution ? { resolution } : {}),
         ...(duration != null ? { duration } : {}),
         ...(image_url ? { images: [await resolveImageInput(image_url)] } : {}),
       })
-      return text(urls.join('\n'))
+      return await taskResult(taskId, await pollTask('video', taskId, wait_seconds), false)
+    } catch (e) { return fail(e) }
+  },
+)
+
+server.tool(
+  'get_task',
+  'Check on, or wait for, an image / video / speech task that generate_image, generate_video or text_to_speech handed back as "still running". Returns the result URL(s) once it has finished (with an image preview for image tasks), a failure message if it failed, or "still running" again — in which case call get_task once more. Waits up to wait_seconds before answering, so one call usually suffices for a task that is nearly done. Task ids also appear at https://apimodels.app/console/records.',
+  {
+    task_id: z.string().describe('The task id from the "STILL RUNNING" message (or from the apimodels console).'),
+    wait_seconds: waitSecondsParam('task'),
+    return_image: z.boolean().default(true).describe('For image tasks, attach a downscaled preview of the result. Set false to save context.'),
+  },
+  async ({ task_id, wait_seconds, return_image }) => {
+    try {
+      // Lookup is by id alone server-side; the endpoint only names a default kind for the timing hints.
+      return await taskResult(task_id, await pollTask('video', task_id.trim(), wait_seconds), return_image)
     } catch (e) { return fail(e) }
   },
 )
@@ -381,16 +489,17 @@ server.tool(
         'Voice id. English: English_Trustworthy_Man, English_Graceful_Lady, Serene_Woman. Chinese: male-qn-qingse, female-tianmei. Full list: GET /v1/minimax/voices.',
       ),
     speed: z.number().optional().describe('Optional speaking rate, 0.5-2 (1 = normal).'),
+    wait_seconds: waitSecondsParam('audio'),
   },
-  async ({ text: tts, model, voice_id, speed }) => {
+  async ({ text: tts, model, voice_id, speed, wait_seconds }) => {
     try {
-      const urls = await runAsyncTask('audio', {
+      const taskId = await submitTask('audio', {
         model,
         text: tts,
         voice_id,
         ...(speed != null ? { voice_setting: { voice_id, speed } } : {}),
       })
-      return text(urls.join('\n'))
+      return await taskResult(taskId, await pollTask('audio', taskId, wait_seconds), false)
     } catch (e) { return fail(e) }
   },
 )
