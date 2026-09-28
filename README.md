@@ -10,7 +10,7 @@ One key unlocks GPT-5.5, Claude, Gemini, GLM, DeepSeek, Qwen, Seedance, Veo, Kli
 |------|--------------|
 | `list_models` | List available model ids (chat / image / video / audio). |
 | `chat` | Chat / text completion with any LLM (`gpt-5-5`, `claude-opus-4-8`, `gemini-3-pro-preview`, …). |
-| `generate_image` | Text-to-image or image edit; returns the image URL(s) plus a downscaled preview the model can look at. |
+| `generate_image` | Text-to-image or image edit; returns the image URL(s) plus a downscaled preview the model can look at. With `doubao-seedream-5-0-flash` it can also keep a transparent background (`background: "transparent"`) or split one image into a base plus up to 16 transparent layers with names and positions (`layer_decomposition: true`, billed per output image). |
 | `review_image` | A vision model critiques an image against your brief and proposes a revised prompt. |
 | `generate_video` | Text-to-video (optional reference image); returns the video URL(s), or a task id if it is not done within `wait_seconds`. |
 | `get_task` | Wait for / check on a task that `generate_image`, `generate_video` or `text_to_speech` handed back as still running. |

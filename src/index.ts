@@ -183,8 +183,11 @@ async function submitTask(kind: Kind, body: Record<string, unknown>): Promise<st
   return taskId
 }
 
+/** One entry of resultJson.layers — returned by Seedream 5.0 Flash layer splitting. Index 0 is the flattened base. */
+type LayerInfo = { name?: string; role?: string; z_index?: number; description?: string; bounding_box?: { absolute?: number[]; normalized?: number[] } }
+
 type TaskState =
-  | { state: 'completed'; urls: string[]; kind: Kind }
+  | { state: 'completed'; urls: string[]; kind: Kind; layers?: LayerInfo[] }
   | { state: 'failed'; message: string; retryable: boolean; kind: Kind }
   | { state: 'running'; elapsedS: number; kind: Kind }
 
@@ -216,7 +219,14 @@ async function pollTask(kind: Kind, taskId: string, waitS: number): Promise<Task
     if (d.state === 'completed') {
       const urls: string[] = d.resultUrls || []
       if (!urls.length) throw new Error(`Task ${taskId} completed but returned no result URLs`)
-      return { state: 'completed', urls, kind: k }
+      // Layer splitting returns one URL per layer and the per-layer metadata in
+      // resultJson.layers; the task endpoint serialises resultJson as a string.
+      let layers: LayerInfo[] | undefined
+      try {
+        const rj = typeof d.resultJson === 'string' ? JSON.parse(d.resultJson) : d.resultJson
+        if (Array.isArray(rj?.layers)) layers = rj.layers
+      } catch { /* no layer metadata */ }
+      return { state: 'completed', urls, kind: k, ...(layers ? { layers } : {}) }
     }
     if (d.state === 'failed') {
       return { state: 'failed', message: d.failMsg || d.failCode || 'unknown error', retryable: Boolean(d.retryable), kind: k }
@@ -295,6 +305,19 @@ const REVIEW_SYSTEM = [
 const text = (s: string) => ({ content: [{ type: 'text' as const, text: s }] })
 const fail = (e: unknown) => ({ content: [{ type: 'text' as const, text: `Error: ${e instanceof Error ? e.message : String(e)}` }], isError: true })
 
+/** Layer-split result: one line per image with the layer name and its box in the original (pixels), then the URL. */
+function layerText(urls: string[], layers: LayerInfo[]): string {
+  const lines = urls.map((u, i) => {
+    const l = layers[i] ?? {}
+    const box = l.bounding_box?.absolute ? ` box=[${l.bounding_box.absolute.join(',')}]` : ''
+    return `[${i}] ${l.name ?? (i === 0 ? 'base' : 'layer')}${box}\n    ${u}`
+  })
+  return [
+    `LAYERS — ${urls.length} images: [0] is the flattened base, [1..] are transparent PNG layers in stacking order (box = x1,y1,x2,y2 in the original image). Billed per image. Layer names come from the model and may be in Chinese.`,
+    ...lines,
+  ].join('\n')
+}
+
 /** Result URLs, plus previews for image tasks when asked. Shared by generate_image and get_task. */
 async function taskResult(taskId: string, s: TaskState, returnImage: boolean) {
   if (s.state === 'running') return text(runningText(taskId, s))
@@ -302,7 +325,7 @@ async function taskResult(taskId: string, s: TaskState, returnImage: boolean) {
   const previews = returnImage && s.kind === 'images' ? await Promise.all(s.urls.slice(0, 2).map(imagePreview)) : []
   return {
     content: [
-      { type: 'text' as const, text: s.urls.join('\n') },
+      { type: 'text' as const, text: s.layers ? layerText(s.urls, s.layers) : s.urls.join('\n') },
       ...previews.flatMap((p) => (p ? [{ type: 'image' as const, data: p.data, mimeType: p.mimeType }] : [])),
     ],
   }
@@ -313,7 +336,7 @@ const waitSecondsParam = (what: string) =>
     `How long to wait for the ${what} before returning a task id instead (seconds, 0–${MAX_WAIT_S}). Default ${DEFAULT_WAIT_S}: Codex aborts tool calls at 60 s unless tool_timeout_sec is raised. In Claude Code / Claude Desktop you can pass up to ${MAX_WAIT_S} to get the URL in one call.`,
   )
 
-const server = new McpServer({ name: 'apimodels-mcp', version: '0.3.0' })
+const server = new McpServer({ name: 'apimodels-mcp', version: '0.4.0' })
 
 server.tool(
   'list_models',
@@ -357,18 +380,25 @@ server.tool(
   'generate_image',
   'Generate an image from a text prompt (or edit an input image). Returns the URL(s) of the generated image, valid 7 days, plus a downscaled preview of the image itself when the client can show tool-result images to you. Images take about 50 s (9 in 10 within 90 s); if the task is still running when wait_seconds is up you get a task id — call get_task with it, do not resubmit. If you cannot see the image in the result, call review_image with the returned URL to get a written critique and a revised prompt, then generate again. Roughly $0.025 per image on the default model; gpt-image-2-lite is $0.008.',
   {
-    prompt: z.string().describe('Text description of the image to generate.'),
-    model: z.string().default('gpt-image-2').describe('Image model id, e.g. gpt-image-2, gpt-image-2-lite (cheapest), gemini-3-pro-image, gemini-2.5-flash-image, doubao-seedream-4-5-251128.'),
+    prompt: z.string().optional().describe('Text description of the image to generate (or the edit to make). Required, except with layer_decomposition where it is optional.'),
+    model: z.string().default('gpt-image-2').describe('Image model id, e.g. gpt-image-2, gpt-image-2-lite (cheapest), gemini-3-pro-image, gemini-3.1-flash-image, doubao-seedream-5-0-flash ($0.03, fast, 1K/2K; supports background and layer_decomposition), doubao-seedream-5-0-pro ($0.03 1K / $0.06 2K, precise region edits).'),
     aspect_ratio: z.string().optional().describe('Optional aspect ratio, e.g. 1:1, 16:9, 9:16.'),
     resolution: z.string().optional().describe('Optional resolution, e.g. 1K, 2K, 4K.'),
     image_url: z.string().optional().describe('Optional input image for image-to-image edits. Accepts a public https:// URL, a LOCAL FILE PATH, a localhost URL, or a data: URI — local sources are uploaded for you automatically.'),
+    background: z.enum(['transparent']).optional().describe('Set to "transparent" to edit an image that already has a transparent background and keep it transparent (PNG with alpha out). Needs image_url pointing at ONE PNG with an alpha channel. doubao-seedream-5-0-flash or doubao-seedream-5-0-pro only.'),
+    layer_decomposition: z.boolean().optional().describe('Split the image in image_url into a flattened base plus up to 16 transparent PNG layers (text blocks, subjects, props), each returned with a name and its box in the original. prompt is optional. Billed $0.03 per output image, so tell the user the cost depends on how many layers come back (at most $0.51). doubao-seedream-5-0-flash only.'),
     return_image: z.boolean().default(true).describe('Attach a downscaled preview (max 1024px JPEG) of the result so you can look at it. Set false to save context when you only need the URL.'),
     wait_seconds: waitSecondsParam('image'),
   },
-  async ({ prompt, model, aspect_ratio, resolution, image_url, return_image, wait_seconds }) => {
+  async ({ prompt, model, aspect_ratio, resolution, image_url, background, layer_decomposition, return_image, wait_seconds }) => {
     try {
+      if (!prompt && !layer_decomposition) throw new Error('prompt is required (it is optional only with layer_decomposition).')
+      if ((background || layer_decomposition) && !image_url) throw new Error(`${layer_decomposition ? 'layer_decomposition' : 'background'} needs image_url: exactly one input image.`)
       const taskId = await submitTask('images', {
-        model, prompt,
+        model,
+        ...(prompt ? { prompt } : {}),
+        ...(background ? { background } : {}),
+        ...(layer_decomposition ? { layer_decomposition: true } : {}),
         ...(aspect_ratio ? { aspect_ratio } : {}),
         ...(resolution ? { resolution } : {}),
         ...(image_url ? { image_url: await resolveImageInput(image_url) } : {}),
