@@ -336,17 +336,30 @@ const waitSecondsParam = (what: string) =>
     `How long to wait for the ${what} before returning a task id instead (seconds, 0–${MAX_WAIT_S}). Default ${DEFAULT_WAIT_S}: Codex aborts tool calls at 60 s unless tool_timeout_sec is raised. In Claude Code / Claude Desktop you can pass up to ${MAX_WAIT_S} to get the URL in one call.`,
   )
 
-const server = new McpServer({ name: 'apimodels-mcp', version: '0.4.0' })
+const server = new McpServer({ name: 'apimodels-mcp', version: '0.4.1' })
 
 server.tool(
   'list_models',
-  'List the model ids available on apimodels.app (chat, image, video, audio). Use the returned ids with the other tools. Caveat: a handful of entries are internal names that the generation endpoints reject (e.g. seedance-2-fast, seedance-2, motion-control) — the public alias is the dotted form, e.g. seedance-2.0-fast. If an id comes back "Invalid model", try the dotted variant before giving up.',
+  'List the model ids available on apimodels.app, grouped by type (chat, image, video, audio, embedding) with the endpoint each one uses. Every id listed is callable. Use chat ids with chat, image ids with generate_image, video ids with generate_video, audio ids with text_to_speech.',
   {},
   async () => {
     try {
       const res = await apiFetch('/models')
-      const ids = (res?.data || []).map((m: any) => m.id).filter(Boolean)
-      return text(ids.length ? ids.join('\n') : JSON.stringify(res))
+      const rows: Array<{ id: string; modality?: string; endpoint?: string }> = (res?.data || []).filter((m: any) => m?.id)
+      if (!rows.length) return text(JSON.stringify(res))
+      // The catalog carries modality + endpoint (2026-10). Group by modality so the caller can pick the right tool.
+      const groups = new Map<string, string[]>()
+      for (const m of rows) {
+        const key = m.modality ? `${m.modality}${m.endpoint ? ` (${m.endpoint})` : ''}` : 'other'
+        if (!groups.has(key)) groups.set(key, [])
+        groups.get(key)!.push(m.id)
+      }
+      const order = ['chat', 'image', 'video', 'audio', 'embedding']
+      const keys = [...groups.keys()].sort((a, b) => {
+        const ia = order.findIndex(o => a.startsWith(o)), ib = order.findIndex(o => b.startsWith(o))
+        return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || a.localeCompare(b)
+      })
+      return text(keys.map(k => `## ${k}: ${groups.get(k)!.length}\n${groups.get(k)!.join('\n')}`).join('\n\n'))
     } catch (e) { return fail(e) }
   },
 )
@@ -356,7 +369,7 @@ server.tool(
   'Chat / text completion with any LLM on apimodels.app (GPT-5.5, Claude, Gemini, GLM, DeepSeek, Qwen, …). Returns the assistant reply text.',
   {
     prompt: z.string().describe('The user message / prompt.'),
-    model: z.string().default('gpt-5-5').describe('Model id, e.g. gpt-5-5, claude-opus-4-8, claude-sonnet-4-6, gemini-3-pro-preview, deepseek-v4-pro.'),
+    model: z.string().default('gpt-5-5').describe('Model id, e.g. gpt-5-5, gpt-6.1-sol, gpt-6-sol, claude-opus-5-5, claude-sonnet-5, gemini-3-pro-preview, deepseek-v4-pro. Call list_models for the full list.'),
     system: z.string().optional().describe('Optional system prompt.'),
     max_tokens: z.number().int().positive().optional().describe('Optional max output tokens.'),
   },
@@ -381,7 +394,7 @@ server.tool(
   'Generate an image from a text prompt (or edit an input image). Returns the URL(s) of the generated image, valid 7 days, plus a downscaled preview of the image itself when the client can show tool-result images to you. Images take about 50 s (9 in 10 within 90 s); if the task is still running when wait_seconds is up you get a task id — call get_task with it, do not resubmit. If you cannot see the image in the result, call review_image with the returned URL to get a written critique and a revised prompt, then generate again. Roughly $0.025 per image on the default model; gpt-image-2-lite is $0.008.',
   {
     prompt: z.string().optional().describe('Text description of the image to generate (or the edit to make). Required, except with layer_decomposition where it is optional.'),
-    model: z.string().default('gpt-image-2').describe('Image model id, e.g. gpt-image-2, gpt-image-2-lite (cheapest), gemini-3-pro-image, gemini-3.1-flash-image, doubao-seedream-5-0-flash ($0.03, fast, 1K/2K; supports background and layer_decomposition), doubao-seedream-5-0-pro ($0.03 1K / $0.06 2K, precise region edits).'),
+    model: z.string().default('gpt-image-2').describe('Image model id, e.g. gpt-image-2, gpt-image-2.5-flare, flux-2-klein-4b ($0.006, fastest, up to 3 reference images), gpt-image-2-lite, gemini-3-pro-image, gemini-3-pro-image-gemini ($0.03 flat), qwen3-image (small in-image text), gemini-3.1-flash-image, doubao-seedream-5-0-flash ($0.03, fast, 1K/2K; supports background and layer_decomposition), doubao-seedream-5-0-pro ($0.03 1K / $0.06 2K, precise region edits).'),
     aspect_ratio: z.string().optional().describe('Optional aspect ratio, e.g. 1:1, 16:9, 9:16.'),
     resolution: z.string().optional().describe('Optional resolution, e.g. 1K, 2K, 4K.'),
     image_url: z.string().optional().describe('Optional input image for image-to-image edits. Accepts a public https:// URL, a LOCAL FILE PATH, a localhost URL, or a data: URI — local sources are uploaded for you automatically.'),
@@ -444,7 +457,7 @@ server.tool(
   'Generate a video from a text prompt (and optional reference image). Submits the job and waits up to wait_seconds: returns the video URL(s) (valid 7 days) if it finishes in time, otherwise a task id — then call get_task with that id; never resubmit a running task. Video takes a median 2.5 minutes and 9 in 10 finish within 8 minutes, so expect one or two get_task calls. Video is the most expensive modality here — the default model costs roughly $0.30-$0.50 per clip; pass model:"veo-3.1-fast-fhd" for the cheapest option at $0.07 flat.',
   {
     prompt: z.string().describe('Text description of the video.'),
-    model: z.string().default('seedance-2.0-fast').describe('Video model id. Use the dotted public names: seedance-2.0-fast, seedance-2.0, seedance-2.5, veo-3.1-fast-fhd ($0.07 flat, cheapest), veo-3.1, grok-video-3, kling-v2-6, minimax-h3. The bare forms seedance-2-fast / seedance-2 are internal names and will 400.'),
+    model: z.string().default('seedance-2.0-fast').describe('Video model id. Use the dotted public names: seedance-2.0-fast, seedance-2.0, seedance-2.0-mini, seedance-2.5, wan-3.0-video, minimax-h3, minimax-h3-lite (low cost, up to 768p), ltx-2.3, grok-imagine-video-1.5, veo-3.1-fast-fhd ($0.07 flat), veo-3.1, kling-v2-6. Call list_models for the full list.'),
     aspect_ratio: z.string().optional().describe('Optional aspect ratio, e.g. 16:9, 9:16, 1:1.'),
     resolution: z.string().optional().describe('Optional resolution, e.g. 480p, 720p, 1080p.'),
     duration: z.union([z.number(), z.string()]).optional().describe('Optional duration in seconds, e.g. 5 or 10.'),
