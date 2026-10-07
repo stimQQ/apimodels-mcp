@@ -336,7 +336,7 @@ const waitSecondsParam = (what: string) =>
     `How long to wait for the ${what} before returning a task id instead (seconds, 0–${MAX_WAIT_S}). Default ${DEFAULT_WAIT_S}: Codex aborts tool calls at 60 s unless tool_timeout_sec is raised. In Claude Code / Claude Desktop you can pass up to ${MAX_WAIT_S} to get the URL in one call.`,
   )
 
-const server = new McpServer({ name: 'apimodels-mcp', version: '0.4.1' })
+const server = new McpServer({ name: 'apimodels-mcp', version: '0.4.2' })
 
 server.tool(
   'list_models',
@@ -369,7 +369,7 @@ server.tool(
   'Chat / text completion with any LLM on apimodels.app (GPT-5.5, Claude, Gemini, GLM, DeepSeek, Qwen, …). Returns the assistant reply text.',
   {
     prompt: z.string().describe('The user message / prompt.'),
-    model: z.string().default('gpt-5-5').describe('Model id, e.g. gpt-5-5, gpt-6.1-sol, gpt-6-sol, claude-opus-5-5, claude-sonnet-5, gemini-3-pro-preview, deepseek-v4-pro. Call list_models for the full list.'),
+    model: z.string().default('gpt-5-5').describe('Model id, e.g. gpt-5-5, gpt-6.1-sol, gpt-6-sol, claude-opus-5-5, claude-sonnet-5-5 (Claude Sonnet 5.5, fast and strong at coding and agent work, $1.20 / $6 per 1M tokens), claude-sonnet-5, gemini-3-pro-preview, deepseek-v4-pro. Call list_models for the full list.'),
     system: z.string().optional().describe('Optional system prompt.'),
     max_tokens: z.number().int().positive().optional().describe('Optional max output tokens.'),
   },
@@ -394,7 +394,7 @@ server.tool(
   'Generate an image from a text prompt (or edit an input image). Returns the URL(s) of the generated image, valid 7 days, plus a downscaled preview of the image itself when the client can show tool-result images to you. Images take about 50 s (9 in 10 within 90 s); if the task is still running when wait_seconds is up you get a task id — call get_task with it, do not resubmit. If you cannot see the image in the result, call review_image with the returned URL to get a written critique and a revised prompt, then generate again. Roughly $0.025 per image on the default model; gpt-image-2-lite is $0.008.',
   {
     prompt: z.string().optional().describe('Text description of the image to generate (or the edit to make). Required, except with layer_decomposition where it is optional.'),
-    model: z.string().default('gpt-image-2').describe('Image model id, e.g. gpt-image-2, gpt-image-2.5-flare, flux-2-klein-4b ($0.006, fastest, up to 3 reference images), gpt-image-2-lite, gemini-3-pro-image, gemini-3-pro-image-gemini ($0.03 flat), qwen3-image (small in-image text), gemini-3.1-flash-image, doubao-seedream-5-0-flash ($0.03, fast, 1K/2K; supports background and layer_decomposition), doubao-seedream-5-0-pro ($0.03 1K / $0.06 2K, precise region edits).'),
+    model: z.string().default('gpt-image-2').describe('Image model id, e.g. gpt-image-2, gpt-image-2.5-flare, flux-2-klein-4b ($0.006, fastest, up to 3 reference images), gpt-image-2-lite, gemini-3-pro-image, gemini-3-pro-image-gemini ($0.03 flat), qwen3-image (small in-image text), gemini-3.1-flash-image, nano-banana-2-1 (Google Nano Banana 2.1: $0.024 1K / $0.04 2K / $0.064 4K, accurate in-image text, 15 aspect ratios incl. 21:9 and 1:8), doubao-seedream-5-0-flash ($0.03, fast, 1K/2K; supports background and layer_decomposition), doubao-seedream-5-0-pro ($0.03 1K / $0.06 2K, precise region edits).'),
     aspect_ratio: z.string().optional().describe('Optional aspect ratio, e.g. 1:1, 16:9, 9:16.'),
     resolution: z.string().optional().describe('Optional resolution, e.g. 1K, 2K, 4K.'),
     image_url: z.string().optional().describe('Optional input image for image-to-image edits. Accepts a public https:// URL, a LOCAL FILE PATH, a localhost URL, or a data: URI — local sources are uploaded for you automatically.'),
