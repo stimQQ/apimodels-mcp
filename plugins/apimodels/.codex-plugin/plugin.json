@@ -1,0 +1,31 @@
+{
+  "name": "apimodels",
+  "version": "0.1.0",
+  "description": "Generate video, images and voice-over from Codex with apimodels.app: Seedance, Veo, Kling, MiniMax Hailuo, Wan, GPT Image, Nano Banana, Seedream, ElevenLabs and more, on one API key.",
+  "author": { "name": "apimodels", "url": "https://apimodels.app" },
+  "homepage": "https://apimodels.app/docs/codex",
+  "repository": "https://github.com/stimQQ/apimodels-mcp",
+  "license": "MIT",
+  "keywords": ["video", "image", "text-to-speech", "seedance", "veo", "kling", "gpt-image", "mcp"],
+  "skills": "./skills/",
+  "mcpServers": "./codex.mcp.json",
+  "interface": {
+    "displayName": "apimodels",
+    "shortDescription": "Generate video, images and voice-over",
+    "longDescription": "Lets Codex plan a video or image job and render it on apimodels.app. Codex writes the script, shot list and prompts; the plugin's tools generate the clips, frames and narration and return downloadable files. One apimodels API key covers Seedance, Veo, Kling, MiniMax Hailuo, Wan, Grok Imagine, GPT Image, Nano Banana, Seedream, ElevenLabs and MiniMax speech. Pay per successful generation; failed generations are not billed.",
+    "developerName": "apimodels",
+    "category": "Media",
+    "capabilities": ["Read", "Write"],
+    "websiteURL": "https://apimodels.app",
+    "privacyPolicyURL": "https://apimodels.app/privacy",
+    "termsOfServiceURL": "https://apimodels.app/terms",
+    "defaultPrompt": [
+      "Make a 5-second 16:9 video of a kitten slowly raising its head in morning light",
+      "Plan a 20-second product video for this repo and render it shot by shot",
+      "Generate a 9:16 cover image with the title \"Launch day\""
+    ],
+    "brandColor": "#F5FF60",
+    "composerIcon": "./assets/logo.png",
+    "logo": "./assets/logo.png"
+  }
+}

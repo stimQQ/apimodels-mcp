@@ -1,0 +1,15 @@
+{
+  "name": "apimodels",
+  "owner": { "name": "apimodels", "url": "https://apimodels.app" },
+  "metadata": {
+    "description": "apimodels.app plugins for coding agents: generate video, images and voice-over from Codex and Claude Code."
+  },
+  "plugins": [
+    {
+      "name": "apimodels",
+      "source": "./plugins/apimodels",
+      "description": "Generate video, images and voice-over with apimodels.app (Seedance, Veo, Kling, MiniMax Hailuo, Wan, GPT Image, Nano Banana, Seedream, ElevenLabs, ...).",
+      "category": "media"
+    }
+  ]
+}

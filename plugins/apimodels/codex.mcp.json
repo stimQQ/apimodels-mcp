@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "apimodels": {
+      "command": "npx",
+      "args": ["-y", "apimodels-mcp@latest"],
+      "env_vars": ["APIMODELS_API_KEY", "APIMODELS_CREDENTIALS_FILE"],
+      "startup_timeout_sec": 90
+    }
+  }
+}

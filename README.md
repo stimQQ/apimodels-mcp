@@ -4,10 +4,36 @@ MCP server for [apimodels.app](https://apimodels.app) — call **image, video, L
 
 One key unlocks GPT-5.5, Claude, Gemini, GLM, DeepSeek, Qwen, Seedance, Veo, Kling, gpt-image-2, Gemini Image, MiniMax speech and more — billed in USD, you only pay for successful generations.
 
+## Fastest setup: the Codex / Claude Code plugin
+
+Coding agents are good at planning — scripts, shot lists, prompts, editing with ffmpeg. The **apimodels plugin** gives them the part they cannot do: rendering the video, images and voice-over. It bundles this MCP server plus a skill that teaches the agent when to use it, how to pick a model, how to wait for long renders and when to ask before spending.
+
+1. **Save your API key once** (needs [Node.js](https://nodejs.org/en/download) 18+; get a key at <https://apimodels.app/console/api-keys>):
+   ```bash
+   npx -y apimodels-mcp login
+   ```
+   It checks the key and stores it in `~/.apimodels/credentials.json`, where every client finds it — including desktop apps that do not see your shell's environment variables.
+2. **Install the plugin.**
+   - Claude Code (2.1.275 or later):
+     ```
+     /plugin install apimodels --marketplace stimQQ/apimodels-mcp
+     ```
+     Older versions: `/plugin marketplace add stimQQ/apimodels-mcp`, then `/plugin install apimodels@apimodels`.
+   - Codex:
+     ```bash
+     codex plugin marketplace add stimQQ/apimodels-mcp
+     codex plugin add apimodels@apimodels
+     ```
+     Then restart Codex. Codex asks you to approve each call that spends credits (`generate_video`, `generate_image`, `text_to_speech`, `chat`, `review_image`); checking progress, the model list and the balance never asks.
+3. **Ask in plain words**, e.g. *"make a 5-second 16:9 video of a kitten slowly raising its head in morning light"* or *"plan a 20-second product video for this repo and render it shot by shot"*.
+
+No Node.js yet? Install the plugin anyway and ask for a video: the skill has the agent check for Node.js and, with your OK, install the official LTS for you (`winget` on Windows, Apple's installer on macOS).
+
 ## Tools
 
 | Tool | What it does |
 |------|--------------|
+| `get_balance` | Your apimodels balance in USD — the agent checks it before a batch. |
 | `list_models` | List available model ids (chat / image / video / audio). |
 | `chat` | Chat / text completion with any LLM (`gpt-5-5`, `claude-opus-4-8`, `gemini-3-pro-preview`, …). |
 | `generate_image` | Text-to-image or image edit; returns the image URL(s) plus a downscaled preview the model can look at. With `doubao-seedream-5-0-flash` it can also keep a transparent background (`background: "transparent"`) or split one image into a base plus up to 16 transparent layers with names and positions (`layer_decomposition: true`, billed per output image). |
@@ -53,8 +79,8 @@ Uploads land in your account's R2 space and are auto-deleted after 7 days.
 
 ## Setup
 
-1. Get an API key at <https://apimodels.app/console/api-keys> (it looks like `sk_…`).
-2. Add the server to your MCP client.
+1. Get an API key at <https://apimodels.app/console/api-keys> (it looks like `sk_…`) and save it with `npx -y apimodels-mcp login` — or put it in the server's environment as `APIMODELS_API_KEY`, as the examples below do.
+2. Add the server to your MCP client. `npx -y apimodels-mcp status` shows which key is in use and your balance.
 
 ### Claude Desktop
 
@@ -139,7 +165,8 @@ Everything the tools call is documented on apimodels.app:
 
 | Env var | Default | Description |
 |---------|---------|-------------|
-| `APIMODELS_API_KEY` | — (required) | Your `sk_…` key. |
+| `APIMODELS_API_KEY` | — | Your `sk_…` key. Optional when you have run `apimodels-mcp login`; if both exist, this one wins. |
+| `APIMODELS_CREDENTIALS_FILE` | `~/.apimodels/credentials.json` | Where `apimodels-mcp login` saves the key and where the server looks for it. |
 | `APIMODELS_BASE_URL` | `https://api.apimodels.app/v1` | API base URL. |
 | `APIMODELS_WAIT_SECONDS` | `50` | Default `wait_seconds` for `generate_image`, `generate_video`, `text_to_speech` and `get_task`: how long a call waits before handing back a task id. Max 900. |
 | `APIMODELS_TIMEOUT_MS` | — | Deprecated (0.2.x): the same wait in milliseconds. Still honoured if set. |

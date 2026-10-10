@@ -6,8 +6,12 @@
  * MCP client (Claude Desktop, Cursor, …) can call every apimodels model with a
  * single API key.
  *
+ * API key (0.5.0): `npx -y apimodels-mcp login` stores it in ~/.apimodels/credentials.json,
+ * or set APIMODELS_API_KEY (used first). See credentials.ts for why the file exists.
+ *
  * Config (environment variables):
- *   APIMODELS_API_KEY       (required)  your sk_… key from https://apimodels.app/console/api-keys
+ *   APIMODELS_API_KEY       (optional)  your sk_… key from https://apimodels.app/console/api-keys
+ *   APIMODELS_CREDENTIALS_FILE (optional) where `login` stores the key, default ~/.apimodels/credentials.json
  *   APIMODELS_BASE_URL      (optional)  default https://api.apimodels.app/v1
  *   APIMODELS_WAIT_SECONDS  (optional)  default wait_seconds for generate_* / get_task, default 50
  *   APIMODELS_TIMEOUT_MS    (deprecated) the same wait in milliseconds; honoured for old configs
@@ -30,8 +34,8 @@ import { z } from 'zod'
 import { readFile } from 'node:fs/promises'
 import { basename, join } from 'node:path'
 import { homedir } from 'node:os'
+import { resolveKey, runCli, CLI_COMMANDS, KEYS_URL } from './credentials.js'
 
-const API_KEY = process.env.APIMODELS_API_KEY
 const BASE_URL = (process.env.APIMODELS_BASE_URL || 'https://api.apimodels.app/v1').replace(/\/$/, '')
 /** Longest a single tool call may wait. Claude Code's stdio idle limit is 30 min; stay well under it. */
 const MAX_WAIT_S = 900
@@ -45,13 +49,16 @@ const POLL_INTERVAL_MS = 3_000
 
 // Do NOT exit when the key is missing: directory scanners and MCP inspectors start
 // the server without credentials just to read the tool list. The key is checked
-// when a tool actually needs the API (requireKey below).
-const NO_KEY_MSG = 'APIMODELS_API_KEY is not set. Get a key at https://apimodels.app/console/api-keys and add it to this server\'s environment.'
-if (!API_KEY) console.error(`[apimodels-mcp] warning: ${NO_KEY_MSG}`)
+// when a tool actually needs the API (requireKey below) — and looked up again each
+// time, so a `login` done while the agent is running takes effect immediately.
+// The message is read by the agent: it must send the user to a terminal, never ask
+// them to paste the key into the chat.
+const NO_KEY_MSG = `No apimodels API key found. Ask the user to run \`npx -y apimodels-mcp login\` in a terminal (it verifies the key and stores it locally; no restart needed), or to set APIMODELS_API_KEY for this MCP server. Do not ask the user to paste the key into the chat. Keys: ${KEYS_URL}`
 
 function requireKey(): string {
-  if (!API_KEY) throw new Error(NO_KEY_MSG)
-  return API_KEY
+  const k = resolveKey()
+  if (!k) throw new Error(NO_KEY_MSG)
+  return k.key
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
@@ -336,7 +343,7 @@ const waitSecondsParam = (what: string) =>
     `How long to wait for the ${what} before returning a task id instead (seconds, 0–${MAX_WAIT_S}). Default ${DEFAULT_WAIT_S}: Codex aborts tool calls at 60 s unless tool_timeout_sec is raised. In Claude Code / Claude Desktop you can pass up to ${MAX_WAIT_S} to get the URL in one call.`,
   )
 
-const server = new McpServer({ name: 'apimodels-mcp', version: '0.4.3' })
+const server = new McpServer({ name: 'apimodels-mcp', version: '0.5.0' })
 
 /**
  * Tool annotations (MCP spec). Clients use them to decide whether a call needs the user's OK:
@@ -347,6 +354,21 @@ const server = new McpServer({ name: 'apimodels-mcp', version: '0.4.3' })
  */
 const READ_ONLY = { readOnlyHint: true } as const
 const BILLABLE = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true } as const
+
+server.tool(
+  'get_balance',
+  'Show the apimodels account balance (USD) for the configured API key. Check it before submitting a batch of generations, and tell the user if the balance looks too low for what they asked for.',
+  {},
+  { title: 'Get balance', ...READ_ONLY },
+  async () => {
+    try {
+      const j = await apiFetch('/balance')
+      const d = j?.data ?? j
+      const n = (v: unknown) => Number(v ?? 0).toFixed(4)
+      return text(`Balance: ${n(d?.balance)} ${d?.currency ?? 'USD'} available (total ${n(d?.total)}, held for running tasks ${n(d?.frozen)}). Top up: https://apimodels.app/console/credits`)
+    } catch (e) { return fail(e) }
+  },
+)
 
 server.tool(
   'list_models',
@@ -565,12 +587,22 @@ server.tool(
 )
 
 async function main() {
+  if (!resolveKey()) console.error(`[apimodels-mcp] warning: ${NO_KEY_MSG}`)
   const transport = new StdioServerTransport()
   await server.connect(transport)
   console.error('[apimodels-mcp] ready (stdio). Base URL:', BASE_URL)
 }
 
-main().catch((e) => {
-  console.error('[apimodels-mcp] fatal:', e)
-  process.exit(1)
-})
+// `apimodels-mcp login | logout | status` — a terminal command, not the server.
+const cmd = process.argv[2]
+if (cmd && CLI_COMMANDS.has(cmd)) {
+  runCli(cmd, process.argv.slice(3), BASE_URL).then((code) => process.exit(code), (e) => {
+    console.error(e instanceof Error ? e.message : e)
+    process.exit(1)
+  })
+} else {
+  main().catch((e) => {
+    console.error('[apimodels-mcp] fatal:', e)
+    process.exit(1)
+  })
+}
