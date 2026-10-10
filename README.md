@@ -24,6 +24,7 @@ Coding agents are good at planning — scripts, shot lists, prompts, editing wit
      codex plugin marketplace add stimQQ/apimodels-mcp
      codex plugin add apimodels@apimodels
      ```
+     Only have the Codex desktop app and no `codex` command? Use `npx -y @openai/codex` in place of `codex` — it runs the official CLI on the fly and shares the app's config.
      Then restart Codex. Codex asks you to approve each call that spends credits (`generate_video`, `generate_image`, `text_to_speech`, `chat`, `review_image`); checking progress, the model list and the balance never asks.
 3. **Ask in plain words**, e.g. *"make a 5-second 16:9 video of a kitten slowly raising its head in morning light"* or *"plan a 20-second product video for this repo and render it shot by shot"*.
 
