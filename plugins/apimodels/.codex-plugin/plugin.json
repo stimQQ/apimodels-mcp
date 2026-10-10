@@ -1,6 +1,6 @@
 {
   "name": "apimodels",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Generate video, images and voice-over from Codex with apimodels.app: Seedance, Veo, Kling, MiniMax Hailuo, Wan, GPT Image, Nano Banana, Seedream, ElevenLabs and more, on one API key.",
   "author": { "name": "apimodels", "url": "https://apimodels.app" },
   "homepage": "https://apimodels.app/docs/codex",
