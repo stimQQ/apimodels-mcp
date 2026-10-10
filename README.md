@@ -30,6 +30,20 @@ Coding agents are good at planning — scripts, shot lists, prompts, editing wit
 
 No Node.js yet? Install the plugin anyway and ask for a video: the skill has the agent check for Node.js and, with your OK, install the official LTS for you (`winget` on Windows, Apple's installer on macOS).
 
+## Hosted server: no Node.js, sign in with OAuth
+
+The same tools run at **`https://api.apimodels.app/mcp`** (Streamable HTTP). Nothing to install and no key to copy: add the URL to your client and it asks you to sign in to apimodels.app and click **Authorize**. The access token it gets is a dedicated API key named `MCP · <app> · <date>`; delete that key in the console to disconnect.
+
+- **Codex** — add to `~/.codex/config.toml`, then run `codex mcp login apimodels`:
+  ```toml
+  [mcp_servers.apimodels]
+  url = "https://api.apimodels.app/mcp"
+  ```
+- **Claude Code** — `claude mcp add --transport http apimodels https://api.apimodels.app/mcp`, then `/mcp` → apimodels → Authenticate.
+- **ChatGPT, Claude.ai, Cursor and other clients that take a remote MCP URL** — add it as a custom connector with this URL and sign in when asked.
+
+Differences from the local server: the hosted one cannot read files on your machine — the agent calls `get_upload_url`, uploads the file with `curl -T` and passes the returned URL instead (local paths are refused with that hint) — and each call waits at most 50 seconds before handing back a task id for `get_task`. Signed in with a plain API key instead? Send it as `Authorization: Bearer sk_…`.
+
 ## Tools
 
 | Tool | What it does |
@@ -41,6 +55,7 @@ No Node.js yet? Install the plugin anyway and ask for a video: the skill has the
 | `review_image` | A vision model critiques an image against your brief and proposes a revised prompt. |
 | `generate_video` | Text-to-video (optional reference image); returns the video URL(s), or a task id if it is not done within `wait_seconds`. |
 | `get_task` | Wait for / check on a task that `generate_image`, `generate_video` or `text_to_speech` handed back as still running. |
+| `get_upload_url` | Hosted server only: a 15-minute link to `curl -T` a local file to; returns its public URL. |
 | `text_to_speech` | Text-to-speech (MiniMax voices); returns the audio URL. ElevenLabs TTS is not exposed here — it streams raw bytes from `POST /v1/tts/stream` rather than returning a URL. |
 
 ### Long generations do not get lost
