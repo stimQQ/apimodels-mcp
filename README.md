@@ -107,6 +107,11 @@ env = { APIMODELS_API_KEY = "sk_your_key_here" }
 # tool_timeout_sec = 660
 ```
 
+Two things to know in Codex:
+
+- **Approvals.** Codex asks you to approve any tool call that is not marked read-only. Since 0.4.3, `list_models` and `get_task` are marked read-only, so waiting on a video no longer prompts on every check; the tools that bill your account (`generate_video`, `generate_image`, `text_to_speech`, `chat`, `review_image`) still ask once per call. To skip those prompts as well, add `default_tools_approval_mode = "approve"` under `[mcp_servers.apimodels]`.
+- **Name the tool.** Codex loads MCP tools on demand rather than listing them all up front, so say which one you want — e.g. *"use apimodels generate_video to make a 5-second 16:9 clip of …"*. A bare "make me a video" may not make it look.
+
 ### Cherry Studio
 
 In `Settings → MCP Servers`, add a new server of type **stdio**:

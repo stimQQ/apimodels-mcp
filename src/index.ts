@@ -336,12 +336,23 @@ const waitSecondsParam = (what: string) =>
     `How long to wait for the ${what} before returning a task id instead (seconds, 0–${MAX_WAIT_S}). Default ${DEFAULT_WAIT_S}: Codex aborts tool calls at 60 s unless tool_timeout_sec is raised. In Claude Code / Claude Desktop you can pass up to ${MAX_WAIT_S} to get the URL in one call.`,
   )
 
-const server = new McpServer({ name: 'apimodels-mcp', version: '0.4.2' })
+const server = new McpServer({ name: 'apimodels-mcp', version: '0.4.3' })
+
+/**
+ * Tool annotations (MCP spec). Clients use them to decide whether a call needs the user's OK:
+ * Codex (0.162, verified 2026-10-10) asks for approval on every call to a tool that is not marked
+ * read-only — including every get_task poll while a video renders, so one video meant several
+ * approval prompts. list_models and get_task only read, so they are read-only and run without a
+ * prompt. Everything else submits billable work and stays approval-gated on purpose.
+ */
+const READ_ONLY = { readOnlyHint: true } as const
+const BILLABLE = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true } as const
 
 server.tool(
   'list_models',
   'List the model ids available on apimodels.app, grouped by type (chat, image, video, audio, embedding) with the endpoint each one uses. Every id listed is callable. Use chat ids with chat, image ids with generate_image, video ids with generate_video, audio ids with text_to_speech.',
   {},
+  { title: 'List models', ...READ_ONLY },
   async () => {
     try {
       const res = await apiFetch('/models')
@@ -373,6 +384,7 @@ server.tool(
     system: z.string().optional().describe('Optional system prompt.'),
     max_tokens: z.number().int().positive().optional().describe('Optional max output tokens.'),
   },
+  { title: 'Chat', ...BILLABLE },
   async ({ prompt, model, system, max_tokens }) => {
     try {
       const messages = [
@@ -403,6 +415,7 @@ server.tool(
     return_image: z.boolean().default(true).describe('Attach a downscaled preview (max 1024px JPEG) of the result so you can look at it. Set false to save context when you only need the URL.'),
     wait_seconds: waitSecondsParam('image'),
   },
+  { title: 'Generate image', ...BILLABLE },
   async ({ prompt, model, aspect_ratio, resolution, image_url, background, layer_decomposition, return_image, wait_seconds }) => {
     try {
       if (!prompt && !layer_decomposition) throw new Error('prompt is required (it is optional only with layer_decomposition).')
@@ -429,6 +442,7 @@ server.tool(
     brief: z.string().describe('What the image is supposed to show — usually the prompt it was generated from, plus any requirements the user stated (exact text, aspect ratio, style).'),
     model: z.string().default('gpt-5.6-luna').describe('Vision-capable chat model that does the looking. gpt-5.6-luna (default, cheapest) or claude-sonnet-5 for a more careful read.'),
   },
+  { title: 'Review image', ...BILLABLE },
   async ({ image_url, brief, model }) => {
     try {
       const url = await resolveImageInput(image_url)
@@ -464,6 +478,7 @@ server.tool(
     image_url: z.string().optional().describe('Optional first-frame / reference image for image-to-video. Accepts a public https:// URL, a LOCAL FILE PATH, a localhost URL, or a data: URI — local sources are uploaded for you automatically.'),
     wait_seconds: waitSecondsParam('video'),
   },
+  { title: 'Generate video', ...BILLABLE },
   async ({ prompt, model, aspect_ratio, resolution, duration, image_url, wait_seconds }) => {
     try {
       const taskId = await submitTask('video', {
@@ -486,6 +501,7 @@ server.tool(
     wait_seconds: waitSecondsParam('task'),
     return_image: z.boolean().default(true).describe('For image tasks, attach a downscaled preview of the result. Set false to save context.'),
   },
+  { title: 'Get task result', ...READ_ONLY },
   async ({ task_id, wait_seconds, return_image }) => {
     try {
       // Lookup is by id alone server-side; the endpoint only names a default kind for the timing hints.
@@ -534,6 +550,7 @@ server.tool(
     speed: z.number().optional().describe('Optional speaking rate, 0.5-2 (1 = normal).'),
     wait_seconds: waitSecondsParam('audio'),
   },
+  { title: 'Text to speech', ...BILLABLE },
   async ({ text: tts, model, voice_id, speed, wait_seconds }) => {
     try {
       const taskId = await submitTask('audio', {
