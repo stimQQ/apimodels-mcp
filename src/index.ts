@@ -34,6 +34,8 @@ import { z } from 'zod'
 import { readFile } from 'node:fs/promises'
 import { basename, join } from 'node:path'
 import { homedir } from 'node:os'
+import { AsyncLocalStorage } from 'node:async_hooks'
+import { makeUploadToken, UPLOAD_TTL_MS } from './upload-token.js'
 import { resolveKey, runCli, CLI_COMMANDS, KEYS_URL } from './credentials.js'
 
 const BASE_URL = (process.env.APIMODELS_BASE_URL || 'https://api.apimodels.app/v1').replace(/\/$/, '')
@@ -55,7 +57,23 @@ const POLL_INTERVAL_MS = 3_000
 // them to paste the key into the chat.
 const NO_KEY_MSG = `No apimodels API key found. Run \`npx -y apimodels-mcp login\` (you can run it for the user): it opens apimodels.app in their browser, they click Authorize, and the key is saved on this machine — nothing to copy or paste, no restart needed. Do not ask the user to paste a key into the chat. Keys: ${KEYS_URL}`
 
+const VERSION = '0.7.0'
+
+/**
+ * Hosted mode (`apimodels-mcp serve`, see http.ts): every HTTP request runs inside
+ * requestKey.run({ key }) with the caller's own token, so the helpers below call the API
+ * as that user. In hosted mode there is no fallback to a key on this machine, files and
+ * private URLs are refused, and waits are capped (runtime.waitCap).
+ */
+export const requestKey = new AsyncLocalStorage<{ key: string }>()
+export const runtime = { remote: false, waitCap: MAX_WAIT_S }
+const REMOTE_WAIT_CAP_S = 50
+const REMOTE_FILE_MSG = 'This is the hosted apimodels MCP server, so it cannot read files or private URLs on the user\'s machine. Call get_upload_url, upload the file with the curl command it returns, then pass the URL it prints.'
+
 function requireKey(): string {
+  const scoped = requestKey.getStore()?.key
+  if (scoped) return scoped
+  if (runtime.remote) throw new Error('Not signed in.')
   const k = resolveKey()
   if (!k) throw new Error(NO_KEY_MSG)
   return k.key
@@ -122,6 +140,7 @@ async function resolveImageInput(input: string): Promise<string> {
       /^172\.(1[6-9]|2\d|3[01])\./.test(host) ||
       host.endsWith('.local')
     if (!isLocal) return raw // public URL — our servers can fetch it themselves
+    if (runtime.remote) throw new Error(REMOTE_FILE_MSG)
 
     // Reachable from here (this process is on the user's machine), not from ours.
     const res = await fetch(raw)
@@ -132,6 +151,7 @@ async function resolveImageInput(input: string): Promise<string> {
   }
 
   // Anything else is treated as a filesystem path (absolute, relative, or ~).
+  if (runtime.remote) throw new Error(REMOTE_FILE_MSG)
   const path = raw.startsWith('~') ? join(homedir(), raw.slice(1)) : raw
   let buf: Buffer
   try {
@@ -218,7 +238,7 @@ function kindOf(modelType: unknown, fallback: Kind): Kind {
  * waitS = 0 checks once and returns.
  */
 async function pollTask(kind: Kind, taskId: string, waitS: number): Promise<TaskState> {
-  const deadline = Date.now() + waitS * 1000
+  const deadline = Date.now() + Math.min(waitS, runtime.waitCap) * 1000
   for (;;) {
     const polled = await apiFetch(`/${kind}/generations?task_id=${encodeURIComponent(taskId)}`)
     const d = polled?.data ?? {}
@@ -339,11 +359,11 @@ async function taskResult(taskId: string, s: TaskState, returnImage: boolean) {
 }
 
 const waitSecondsParam = (what: string) =>
-  z.number().int().min(0).max(MAX_WAIT_S).default(DEFAULT_WAIT_S).describe(
-    `How long to wait for the ${what} before returning a task id instead (seconds, 0–${MAX_WAIT_S}). Default ${DEFAULT_WAIT_S}: Codex aborts tool calls at 60 s unless tool_timeout_sec is raised. In Claude Code / Claude Desktop you can pass up to ${MAX_WAIT_S} to get the URL in one call.`,
+  z.number().int().min(0).max(MAX_WAIT_S).default(Math.min(DEFAULT_WAIT_S, runtime.waitCap)).describe(
+    runtime.remote
+      ? `How long to wait for the ${what} before returning a task id instead (seconds). This hosted server waits at most ${runtime.waitCap} s per call; call get_task with the id to keep waiting.`
+      : `How long to wait for the ${what} before returning a task id instead (seconds, 0–${MAX_WAIT_S}). Default ${DEFAULT_WAIT_S}: Codex aborts tool calls at 60 s unless tool_timeout_sec is raised. In Claude Code / Claude Desktop you can pass up to ${MAX_WAIT_S} to get the URL in one call.`,
   )
-
-const server = new McpServer({ name: 'apimodels-mcp', version: '0.6.0' })
 
 /**
  * Tool annotations (MCP spec). Clients use them to decide whether a call needs the user's OK:
@@ -355,247 +375,283 @@ const server = new McpServer({ name: 'apimodels-mcp', version: '0.6.0' })
 const READ_ONLY = { readOnlyHint: true } as const
 const BILLABLE = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true } as const
 
-server.tool(
-  'get_balance',
-  'Show the apimodels account balance (USD) for the configured API key. Check it before submitting a batch of generations, and tell the user if the balance looks too low for what they asked for.',
-  {},
-  { title: 'Get balance', ...READ_ONLY },
-  async () => {
-    try {
-      const j = await apiFetch('/balance')
-      const d = j?.data ?? j
-      const n = (v: unknown) => Number(v ?? 0).toFixed(4)
-      return text(`Balance: ${n(d?.balance)} ${d?.currency ?? 'USD'} available (total ${n(d?.total)}, held for running tasks ${n(d?.frozen)}). Top up: https://apimodels.app/console/credits`)
-    } catch (e) { return fail(e) }
-  },
-)
+export function buildServer(): McpServer {
+  const server = new McpServer({ name: 'apimodels-mcp', version: VERSION })
 
-server.tool(
-  'list_models',
-  'List the model ids available on apimodels.app, grouped by type (chat, image, video, audio, embedding) with the endpoint each one uses. Every id listed is callable. Use chat ids with chat, image ids with generate_image, video ids with generate_video, audio ids with text_to_speech.',
-  {},
-  { title: 'List models', ...READ_ONLY },
-  async () => {
-    try {
-      const res = await apiFetch('/models')
-      const rows: Array<{ id: string; modality?: string; endpoint?: string }> = (res?.data || []).filter((m: any) => m?.id)
-      if (!rows.length) return text(JSON.stringify(res))
-      // The catalog carries modality + endpoint (2026-10). Group by modality so the caller can pick the right tool.
-      const groups = new Map<string, string[]>()
-      for (const m of rows) {
-        const key = m.modality ? `${m.modality}${m.endpoint ? ` (${m.endpoint})` : ''}` : 'other'
-        if (!groups.has(key)) groups.set(key, [])
-        groups.get(key)!.push(m.id)
-      }
-      const order = ['chat', 'image', 'video', 'audio', 'embedding']
-      const keys = [...groups.keys()].sort((a, b) => {
-        const ia = order.findIndex(o => a.startsWith(o)), ib = order.findIndex(o => b.startsWith(o))
-        return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || a.localeCompare(b)
-      })
-      return text(keys.map(k => `## ${k}: ${groups.get(k)!.length}\n${groups.get(k)!.join('\n')}`).join('\n\n'))
-    } catch (e) { return fail(e) }
-  },
-)
+  server.tool(
+    'get_balance',
+    'Show the apimodels account balance (USD) for the configured API key. Check it before submitting a batch of generations, and tell the user if the balance looks too low for what they asked for.',
+    {},
+    { title: 'Get balance', ...READ_ONLY },
+    async () => {
+      try {
+        const j = await apiFetch('/balance')
+        const d = j?.data ?? j
+        const n = (v: unknown) => Number(v ?? 0).toFixed(4)
+        return text(`Balance: ${n(d?.balance)} ${d?.currency ?? 'USD'} available (total ${n(d?.total)}, held for running tasks ${n(d?.frozen)}). Top up: https://apimodels.app/console/credits`)
+      } catch (e) { return fail(e) }
+    },
+  )
 
-server.tool(
-  'chat',
-  'Chat / text completion with any LLM on apimodels.app (GPT-5.5, Claude, Gemini, GLM, DeepSeek, Qwen, …). Returns the assistant reply text.',
-  {
-    prompt: z.string().describe('The user message / prompt.'),
-    model: z.string().default('gpt-5-5').describe('Model id, e.g. gpt-5-5, gpt-6.1-sol, gpt-6-sol, claude-opus-5-5, claude-sonnet-5-5 (Claude Sonnet 5.5, fast and strong at coding and agent work, $1.20 / $6 per 1M tokens), claude-sonnet-5, gemini-3-pro-preview, deepseek-v4-pro. Call list_models for the full list.'),
-    system: z.string().optional().describe('Optional system prompt.'),
-    max_tokens: z.number().int().positive().optional().describe('Optional max output tokens.'),
-  },
-  { title: 'Chat', ...BILLABLE },
-  async ({ prompt, model, system, max_tokens }) => {
-    try {
-      const messages = [
-        ...(system ? [{ role: 'system', content: system }] : []),
-        { role: 'user', content: prompt },
-      ]
-      const res = await apiFetch('/chat/completions', {
-        method: 'POST',
-        body: JSON.stringify({ model, messages, ...(max_tokens ? { max_tokens } : {}) }),
-      })
-      const reply = res?.choices?.[0]?.message?.content
-      return text(typeof reply === 'string' ? reply : JSON.stringify(res))
-    } catch (e) { return fail(e) }
-  },
-)
+  server.tool(
+    'list_models',
+    'List the model ids available on apimodels.app, grouped by type (chat, image, video, audio, embedding) with the endpoint each one uses. Every id listed is callable. Use chat ids with chat, image ids with generate_image, video ids with generate_video, audio ids with text_to_speech.',
+    {},
+    { title: 'List models', ...READ_ONLY },
+    async () => {
+      try {
+        const res = await apiFetch('/models')
+        const rows: Array<{ id: string; modality?: string; endpoint?: string }> = (res?.data || []).filter((m: any) => m?.id)
+        if (!rows.length) return text(JSON.stringify(res))
+        // The catalog carries modality + endpoint (2026-10). Group by modality so the caller can pick the right tool.
+        const groups = new Map<string, string[]>()
+        for (const m of rows) {
+          const key = m.modality ? `${m.modality}${m.endpoint ? ` (${m.endpoint})` : ''}` : 'other'
+          if (!groups.has(key)) groups.set(key, [])
+          groups.get(key)!.push(m.id)
+        }
+        const order = ['chat', 'image', 'video', 'audio', 'embedding']
+        const keys = [...groups.keys()].sort((a, b) => {
+          const ia = order.findIndex(o => a.startsWith(o)), ib = order.findIndex(o => b.startsWith(o))
+          return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || a.localeCompare(b)
+        })
+        return text(keys.map(k => `## ${k}: ${groups.get(k)!.length}\n${groups.get(k)!.join('\n')}`).join('\n\n'))
+      } catch (e) { return fail(e) }
+    },
+  )
 
-server.tool(
-  'generate_image',
-  'Generate an image from a text prompt (or edit an input image). Returns the URL(s) of the generated image, valid 7 days, plus a downscaled preview of the image itself when the client can show tool-result images to you. Images take about 50 s (9 in 10 within 90 s); if the task is still running when wait_seconds is up you get a task id — call get_task with it, do not resubmit. If you cannot see the image in the result, call review_image with the returned URL to get a written critique and a revised prompt, then generate again. Roughly $0.025 per image on the default model; gpt-image-2-lite is $0.008.',
-  {
-    prompt: z.string().optional().describe('Text description of the image to generate (or the edit to make). Required, except with layer_decomposition where it is optional.'),
-    model: z.string().default('gpt-image-2').describe('Image model id, e.g. gpt-image-2, gpt-image-2.5-flare, flux-2-klein-4b ($0.006, fastest, up to 3 reference images), gpt-image-2-lite, gemini-3-pro-image, gemini-3-pro-image-gemini ($0.03 flat), qwen3-image (small in-image text), gemini-3.1-flash-image, nano-banana-2-1 (Google Nano Banana 2.1: $0.024 1K / $0.04 2K / $0.064 4K, accurate in-image text, 15 aspect ratios incl. 21:9 and 1:8), doubao-seedream-5-0-flash ($0.03, fast, 1K/2K; supports background and layer_decomposition), doubao-seedream-5-0-pro ($0.03 1K / $0.06 2K, precise region edits).'),
-    aspect_ratio: z.string().optional().describe('Optional aspect ratio, e.g. 1:1, 16:9, 9:16.'),
-    resolution: z.string().optional().describe('Optional resolution, e.g. 1K, 2K, 4K.'),
-    image_url: z.string().optional().describe('Optional input image for image-to-image edits. Accepts a public https:// URL, a LOCAL FILE PATH, a localhost URL, or a data: URI — local sources are uploaded for you automatically.'),
-    background: z.enum(['transparent']).optional().describe('Set to "transparent" to edit an image that already has a transparent background and keep it transparent (PNG with alpha out). Needs image_url pointing at ONE PNG with an alpha channel. doubao-seedream-5-0-flash or doubao-seedream-5-0-pro only.'),
-    layer_decomposition: z.boolean().optional().describe('Split the image in image_url into a flattened base plus up to 16 transparent PNG layers (text blocks, subjects, props), each returned with a name and its box in the original. prompt is optional. Billed $0.03 per output image, so tell the user the cost depends on how many layers come back (at most $0.51). doubao-seedream-5-0-flash only.'),
-    return_image: z.boolean().default(true).describe('Attach a downscaled preview (max 1024px JPEG) of the result so you can look at it. Set false to save context when you only need the URL.'),
-    wait_seconds: waitSecondsParam('image'),
-  },
-  { title: 'Generate image', ...BILLABLE },
-  async ({ prompt, model, aspect_ratio, resolution, image_url, background, layer_decomposition, return_image, wait_seconds }) => {
-    try {
-      if (!prompt && !layer_decomposition) throw new Error('prompt is required (it is optional only with layer_decomposition).')
-      if ((background || layer_decomposition) && !image_url) throw new Error(`${layer_decomposition ? 'layer_decomposition' : 'background'} needs image_url: exactly one input image.`)
-      const taskId = await submitTask('images', {
-        model,
-        ...(prompt ? { prompt } : {}),
-        ...(background ? { background } : {}),
-        ...(layer_decomposition ? { layer_decomposition: true } : {}),
-        ...(aspect_ratio ? { aspect_ratio } : {}),
-        ...(resolution ? { resolution } : {}),
-        ...(image_url ? { image_url: await resolveImageInput(image_url) } : {}),
-      })
-      return await taskResult(taskId, await pollTask('images', taskId, wait_seconds), return_image)
-    } catch (e) { return fail(e) }
-  },
-)
+  server.tool(
+    'chat',
+    'Chat / text completion with any LLM on apimodels.app (GPT-5.5, Claude, Gemini, GLM, DeepSeek, Qwen, …). Returns the assistant reply text.',
+    {
+      prompt: z.string().describe('The user message / prompt.'),
+      model: z.string().default('gpt-5-5').describe('Model id, e.g. gpt-5-5, gpt-6.1-sol, gpt-6-sol, claude-opus-5-5, claude-sonnet-5-5 (Claude Sonnet 5.5, fast and strong at coding and agent work, $1.20 / $6 per 1M tokens), claude-sonnet-5, gemini-3-pro-preview, deepseek-v4-pro. Call list_models for the full list.'),
+      system: z.string().optional().describe('Optional system prompt.'),
+      max_tokens: z.number().int().positive().optional().describe('Optional max output tokens.'),
+    },
+    { title: 'Chat', ...BILLABLE },
+    async ({ prompt, model, system, max_tokens }) => {
+      try {
+        const messages = [
+          ...(system ? [{ role: 'system', content: system }] : []),
+          { role: 'user', content: prompt },
+        ]
+        const res = await apiFetch('/chat/completions', {
+          method: 'POST',
+          body: JSON.stringify({ model, messages, ...(max_tokens ? { max_tokens } : {}) }),
+        })
+        const reply = res?.choices?.[0]?.message?.content
+        return text(typeof reply === 'string' ? reply : JSON.stringify(res))
+      } catch (e) { return fail(e) }
+    },
+  )
 
-server.tool(
-  'review_image',
-  'Have a vision model look at an image and critique it against a brief. Returns what matches, what is wrong (garbled text, composition, colors, artifacts) and a revised prompt. Use it after generate_image to check the result and decide whether to regenerate — this works in every MCP client, including ones that do not pass tool-result images to you. Costs one small vision chat call (well under $0.01 on the default model).',
-  {
-    image_url: z.string().describe('The image to review: a URL returned by generate_image, any public https:// URL, a LOCAL FILE PATH, a localhost URL, or a data: URI.'),
-    brief: z.string().describe('What the image is supposed to show — usually the prompt it was generated from, plus any requirements the user stated (exact text, aspect ratio, style).'),
-    model: z.string().default('gpt-5.6-luna').describe('Vision-capable chat model that does the looking. gpt-5.6-luna (default, cheapest) or claude-sonnet-5 for a more careful read.'),
-  },
-  { title: 'Review image', ...BILLABLE },
-  async ({ image_url, brief, model }) => {
-    try {
-      const url = await resolveImageInput(image_url)
-      const res = await apiFetch('/chat/completions', {
-        method: 'POST',
-        body: JSON.stringify({
+  server.tool(
+    'generate_image',
+    'Generate an image from a text prompt (or edit an input image). Returns the URL(s) of the generated image, valid 7 days, plus a downscaled preview of the image itself when the client can show tool-result images to you. Images take about 50 s (9 in 10 within 90 s); if the task is still running when wait_seconds is up you get a task id — call get_task with it, do not resubmit. If you cannot see the image in the result, call review_image with the returned URL to get a written critique and a revised prompt, then generate again. Roughly $0.025 per image on the default model; gpt-image-2-lite is $0.008.',
+    {
+      prompt: z.string().optional().describe('Text description of the image to generate (or the edit to make). Required, except with layer_decomposition where it is optional.'),
+      model: z.string().default('gpt-image-2').describe('Image model id, e.g. gpt-image-2, gpt-image-2.5-flare, flux-2-klein-4b ($0.006, fastest, up to 3 reference images), gpt-image-2-lite, gemini-3-pro-image, gemini-3-pro-image-gemini ($0.03 flat), qwen3-image (small in-image text), gemini-3.1-flash-image, nano-banana-2-1 (Google Nano Banana 2.1: $0.024 1K / $0.04 2K / $0.064 4K, accurate in-image text, 15 aspect ratios incl. 21:9 and 1:8), doubao-seedream-5-0-flash ($0.03, fast, 1K/2K; supports background and layer_decomposition), doubao-seedream-5-0-pro ($0.03 1K / $0.06 2K, precise region edits).'),
+      aspect_ratio: z.string().optional().describe('Optional aspect ratio, e.g. 1:1, 16:9, 9:16.'),
+      resolution: z.string().optional().describe('Optional resolution, e.g. 1K, 2K, 4K.'),
+      image_url: z.string().optional().describe('Optional input image for image-to-image edits. Accepts a public https:// URL, a LOCAL FILE PATH, a localhost URL, or a data: URI — local sources are uploaded for you automatically.'),
+      background: z.enum(['transparent']).optional().describe('Set to "transparent" to edit an image that already has a transparent background and keep it transparent (PNG with alpha out). Needs image_url pointing at ONE PNG with an alpha channel. doubao-seedream-5-0-flash or doubao-seedream-5-0-pro only.'),
+      layer_decomposition: z.boolean().optional().describe('Split the image in image_url into a flattened base plus up to 16 transparent PNG layers (text blocks, subjects, props), each returned with a name and its box in the original. prompt is optional. Billed $0.03 per output image, so tell the user the cost depends on how many layers come back (at most $0.51). doubao-seedream-5-0-flash only.'),
+      return_image: z.boolean().default(true).describe('Attach a downscaled preview (max 1024px JPEG) of the result so you can look at it. Set false to save context when you only need the URL.'),
+      wait_seconds: waitSecondsParam('image'),
+    },
+    { title: 'Generate image', ...BILLABLE },
+    async ({ prompt, model, aspect_ratio, resolution, image_url, background, layer_decomposition, return_image, wait_seconds }) => {
+      try {
+        if (!prompt && !layer_decomposition) throw new Error('prompt is required (it is optional only with layer_decomposition).')
+        if ((background || layer_decomposition) && !image_url) throw new Error(`${layer_decomposition ? 'layer_decomposition' : 'background'} needs image_url: exactly one input image.`)
+        const taskId = await submitTask('images', {
           model,
-          max_tokens: 900,
-          messages: [
-            { role: 'system', content: REVIEW_SYSTEM },
-            { role: 'user', content: [
-              { type: 'text', text: `BRIEF:\n${brief}` },
-              { type: 'image_url', image_url: { url } },
-            ] },
-          ],
-        }),
-      })
-      const reply = res?.choices?.[0]?.message?.content
-      return text(typeof reply === 'string' && reply.trim() ? reply : JSON.stringify(res))
-    } catch (e) { return fail(e) }
-  },
-)
+          ...(prompt ? { prompt } : {}),
+          ...(background ? { background } : {}),
+          ...(layer_decomposition ? { layer_decomposition: true } : {}),
+          ...(aspect_ratio ? { aspect_ratio } : {}),
+          ...(resolution ? { resolution } : {}),
+          ...(image_url ? { image_url: await resolveImageInput(image_url) } : {}),
+        })
+        return await taskResult(taskId, await pollTask('images', taskId, wait_seconds), return_image)
+      } catch (e) { return fail(e) }
+    },
+  )
 
-server.tool(
-  'generate_video',
-  'Generate a video from a text prompt (and optional reference image). Submits the job and waits up to wait_seconds: returns the video URL(s) (valid 7 days) if it finishes in time, otherwise a task id — then call get_task with that id; never resubmit a running task. Video takes a median 2.5 minutes and 9 in 10 finish within 8 minutes, so expect one or two get_task calls. Video is the most expensive modality here — the default model costs roughly $0.30-$0.50 per clip; pass model:"veo-3.1-fast-fhd" for the cheapest option at $0.07 flat.',
-  {
-    prompt: z.string().describe('Text description of the video.'),
-    model: z.string().default('seedance-2.0-fast').describe('Video model id. Use the dotted public names: seedance-2.0-fast, seedance-2.0, seedance-2.0-mini, seedance-2.5, wan-3.0-video, minimax-h3, minimax-h3-lite (low cost, up to 768p), ltx-2.3, grok-imagine-video-1.5, veo-3.1-fast-fhd ($0.07 flat), veo-3.1, kling-v2-6. Call list_models for the full list.'),
-    aspect_ratio: z.string().optional().describe('Optional aspect ratio, e.g. 16:9, 9:16, 1:1.'),
-    resolution: z.string().optional().describe('Optional resolution, e.g. 480p, 720p, 1080p.'),
-    duration: z.union([z.number(), z.string()]).optional().describe('Optional duration in seconds, e.g. 5 or 10.'),
-    image_url: z.string().optional().describe('Optional first-frame / reference image for image-to-video. Accepts a public https:// URL, a LOCAL FILE PATH, a localhost URL, or a data: URI — local sources are uploaded for you automatically.'),
-    wait_seconds: waitSecondsParam('video'),
-  },
-  { title: 'Generate video', ...BILLABLE },
-  async ({ prompt, model, aspect_ratio, resolution, duration, image_url, wait_seconds }) => {
-    try {
-      const taskId = await submitTask('video', {
-        model, prompt,
-        ...(aspect_ratio ? { aspect_ratio } : {}),
-        ...(resolution ? { resolution } : {}),
-        ...(duration != null ? { duration } : {}),
-        ...(image_url ? { images: [await resolveImageInput(image_url)] } : {}),
-      })
-      return await taskResult(taskId, await pollTask('video', taskId, wait_seconds), false)
-    } catch (e) { return fail(e) }
-  },
-)
+  server.tool(
+    'review_image',
+    'Have a vision model look at an image and critique it against a brief. Returns what matches, what is wrong (garbled text, composition, colors, artifacts) and a revised prompt. Use it after generate_image to check the result and decide whether to regenerate — this works in every MCP client, including ones that do not pass tool-result images to you. Costs one small vision chat call (well under $0.01 on the default model).',
+    {
+      image_url: z.string().describe('The image to review: a URL returned by generate_image, any public https:// URL, a LOCAL FILE PATH, a localhost URL, or a data: URI.'),
+      brief: z.string().describe('What the image is supposed to show — usually the prompt it was generated from, plus any requirements the user stated (exact text, aspect ratio, style).'),
+      model: z.string().default('gpt-5.6-luna').describe('Vision-capable chat model that does the looking. gpt-5.6-luna (default, cheapest) or claude-sonnet-5 for a more careful read.'),
+    },
+    { title: 'Review image', ...BILLABLE },
+    async ({ image_url, brief, model }) => {
+      try {
+        const url = await resolveImageInput(image_url)
+        const res = await apiFetch('/chat/completions', {
+          method: 'POST',
+          body: JSON.stringify({
+            model,
+            max_tokens: 900,
+            messages: [
+              { role: 'system', content: REVIEW_SYSTEM },
+              { role: 'user', content: [
+                { type: 'text', text: `BRIEF:\n${brief}` },
+                { type: 'image_url', image_url: { url } },
+              ] },
+            ],
+          }),
+        })
+        const reply = res?.choices?.[0]?.message?.content
+        return text(typeof reply === 'string' && reply.trim() ? reply : JSON.stringify(res))
+      } catch (e) { return fail(e) }
+    },
+  )
 
-server.tool(
-  'get_task',
-  'Check on, or wait for, an image / video / speech task that generate_image, generate_video or text_to_speech handed back as "still running". Returns the result URL(s) once it has finished (with an image preview for image tasks), a failure message if it failed, or "still running" again — in which case call get_task once more. Waits up to wait_seconds before answering, so one call usually suffices for a task that is nearly done. Task ids also appear at https://apimodels.app/console/records.',
-  {
-    task_id: z.string().describe('The task id from the "STILL RUNNING" message (or from the apimodels console).'),
-    wait_seconds: waitSecondsParam('task'),
-    return_image: z.boolean().default(true).describe('For image tasks, attach a downscaled preview of the result. Set false to save context.'),
-  },
-  { title: 'Get task result', ...READ_ONLY },
-  async ({ task_id, wait_seconds, return_image }) => {
-    try {
-      // Lookup is by id alone server-side; the endpoint only names a default kind for the timing hints.
-      return await taskResult(task_id, await pollTask('video', task_id.trim(), wait_seconds), return_image)
-    } catch (e) { return fail(e) }
-  },
-)
+  server.tool(
+    'generate_video',
+    'Generate a video from a text prompt (and optional reference image). Submits the job and waits up to wait_seconds: returns the video URL(s) (valid 7 days) if it finishes in time, otherwise a task id — then call get_task with that id; never resubmit a running task. Video takes a median 2.5 minutes and 9 in 10 finish within 8 minutes, so expect one or two get_task calls. Video is the most expensive modality here — the default model costs roughly $0.30-$0.50 per clip; pass model:"veo-3.1-fast-fhd" for the cheapest option at $0.07 flat.',
+    {
+      prompt: z.string().describe('Text description of the video.'),
+      model: z.string().default('seedance-2.0-fast').describe('Video model id. Use the dotted public names: seedance-2.0-fast, seedance-2.0, seedance-2.0-mini, seedance-2.5, wan-3.0-video, minimax-h3, minimax-h3-lite (low cost, up to 768p), ltx-2.3, grok-imagine-video-1.5, veo-3.1-fast-fhd ($0.07 flat), veo-3.1, kling-v2-6. Call list_models for the full list.'),
+      aspect_ratio: z.string().optional().describe('Optional aspect ratio, e.g. 16:9, 9:16, 1:1.'),
+      resolution: z.string().optional().describe('Optional resolution, e.g. 480p, 720p, 1080p.'),
+      duration: z.union([z.number(), z.string()]).optional().describe('Optional duration in seconds, e.g. 5 or 10.'),
+      image_url: z.string().optional().describe('Optional first-frame / reference image for image-to-video. Accepts a public https:// URL, a LOCAL FILE PATH, a localhost URL, or a data: URI — local sources are uploaded for you automatically.'),
+      wait_seconds: waitSecondsParam('video'),
+    },
+    { title: 'Generate video', ...BILLABLE },
+    async ({ prompt, model, aspect_ratio, resolution, duration, image_url, wait_seconds }) => {
+      try {
+        const taskId = await submitTask('video', {
+          model, prompt,
+          ...(aspect_ratio ? { aspect_ratio } : {}),
+          ...(resolution ? { resolution } : {}),
+          ...(duration != null ? { duration } : {}),
+          ...(image_url ? { images: [await resolveImageInput(image_url)] } : {}),
+        })
+        return await taskResult(taskId, await pollTask('video', taskId, wait_seconds), false)
+      } catch (e) { return fail(e) }
+    },
+  )
 
-/**
- * Text to speech.
- *
- * This tool used to default to `eleven-tts-v3` against `/audio/generations`, which
- * cannot work: the ElevenLabs TTS models are served by `POST /v1/tts/stream`, and
- * `/audio/generations` rejects every `eleven-tts-*` id outright
- * ("Invalid model: eleven-tts-v3. Supported: kling-…, eleven-dialogue, …"). Every
- * call 400'd.
- *
- * Of the two ways out, this tool stays on `/audio/generations` and moves to a model
- * that endpoint actually serves. `/v1/tts/stream` returns raw audio BYTES, so an MCP
- * server pointed at it has no URL to hand back — it would have to write a file and
- * change what this tool returns, diverging from generate_image / generate_video.
- * `/audio/generations` keeps the async-task-to-URL shape the rest of the server uses
- * and takes exactly the parameters declared below.
- *
- * MiniMax requires an explicit voice_id (there is no server-side default), so one is
- * baked in here — without it the "default path" would still fail, just with a
- * different message. Voice ids come from GET /v1/minimax/voices.
- */
-server.tool(
-  'text_to_speech',
-  'Convert text to speech (MiniMax voices). Returns the audio file URL (valid 7 days). Costs about $0.004 for a short line; billed at $0.04 per 1000 characters.',
-  {
-    text: z.string().describe('The text to speak.'),
-    model: z
-      .string()
-      .default('minimax-speech-02-turbo')
-      .describe(
-        'TTS model id, e.g. minimax-speech-02-turbo (fast), minimax-speech-02-hd / minimax-speech-2.8-hd (higher quality). Note: eleven-tts-* models are NOT available here — they stream from POST /v1/tts/stream instead.',
-      ),
-    voice_id: z
-      .string()
-      .default('English_Trustworthy_Man')
-      .describe(
-        'Voice id. English: English_Trustworthy_Man, English_Graceful_Lady, Serene_Woman. Chinese: male-qn-qingse, female-tianmei. Full list: GET /v1/minimax/voices.',
-      ),
-    speed: z.number().optional().describe('Optional speaking rate, 0.5-2 (1 = normal).'),
-    wait_seconds: waitSecondsParam('audio'),
-  },
-  { title: 'Text to speech', ...BILLABLE },
-  async ({ text: tts, model, voice_id, speed, wait_seconds }) => {
-    try {
-      const taskId = await submitTask('audio', {
-        model,
-        text: tts,
-        voice_id,
-        ...(speed != null ? { voice_setting: { voice_id, speed } } : {}),
-      })
-      return await taskResult(taskId, await pollTask('audio', taskId, wait_seconds), false)
-    } catch (e) { return fail(e) }
-  },
-)
+  server.tool(
+    'get_task',
+    'Check on, or wait for, an image / video / speech task that generate_image, generate_video or text_to_speech handed back as "still running". Returns the result URL(s) once it has finished (with an image preview for image tasks), a failure message if it failed, or "still running" again — in which case call get_task once more. Waits up to wait_seconds before answering, so one call usually suffices for a task that is nearly done. Task ids also appear at https://apimodels.app/console/records.',
+    {
+      task_id: z.string().describe('The task id from the "STILL RUNNING" message (or from the apimodels console).'),
+      wait_seconds: waitSecondsParam('task'),
+      return_image: z.boolean().default(true).describe('For image tasks, attach a downscaled preview of the result. Set false to save context.'),
+    },
+    { title: 'Get task result', ...READ_ONLY },
+    async ({ task_id, wait_seconds, return_image }) => {
+      try {
+        // Lookup is by id alone server-side; the endpoint only names a default kind for the timing hints.
+        return await taskResult(task_id, await pollTask('video', task_id.trim(), wait_seconds), return_image)
+      } catch (e) { return fail(e) }
+    },
+  )
+
+  /**
+   * Text to speech.
+   *
+   * This tool used to default to `eleven-tts-v3` against `/audio/generations`, which
+   * cannot work: the ElevenLabs TTS models are served by `POST /v1/tts/stream`, and
+   * `/audio/generations` rejects every `eleven-tts-*` id outright
+   * ("Invalid model: eleven-tts-v3. Supported: kling-…, eleven-dialogue, …"). Every
+   * call 400'd.
+   *
+   * Of the two ways out, this tool stays on `/audio/generations` and moves to a model
+   * that endpoint actually serves. `/v1/tts/stream` returns raw audio BYTES, so an MCP
+   * server pointed at it has no URL to hand back — it would have to write a file and
+   * change what this tool returns, diverging from generate_image / generate_video.
+   * `/audio/generations` keeps the async-task-to-URL shape the rest of the server uses
+   * and takes exactly the parameters declared below.
+   *
+   * MiniMax requires an explicit voice_id (there is no server-side default), so one is
+   * baked in here — without it the "default path" would still fail, just with a
+   * different message. Voice ids come from GET /v1/minimax/voices.
+   */
+  server.tool(
+    'text_to_speech',
+    'Convert text to speech (MiniMax voices). Returns the audio file URL (valid 7 days). Costs about $0.004 for a short line; billed at $0.04 per 1000 characters.',
+    {
+      text: z.string().describe('The text to speak.'),
+      model: z
+        .string()
+        .default('minimax-speech-02-turbo')
+        .describe(
+          'TTS model id, e.g. minimax-speech-02-turbo (fast), minimax-speech-02-hd / minimax-speech-2.8-hd (higher quality). Note: eleven-tts-* models are NOT available here — they stream from POST /v1/tts/stream instead.',
+        ),
+      voice_id: z
+        .string()
+        .default('English_Trustworthy_Man')
+        .describe(
+          'Voice id. English: English_Trustworthy_Man, English_Graceful_Lady, Serene_Woman. Chinese: male-qn-qingse, female-tianmei. Full list: GET /v1/minimax/voices.',
+        ),
+      speed: z.number().optional().describe('Optional speaking rate, 0.5-2 (1 = normal).'),
+      wait_seconds: waitSecondsParam('audio'),
+    },
+    { title: 'Text to speech', ...BILLABLE },
+    async ({ text: tts, model, voice_id, speed, wait_seconds }) => {
+      try {
+        const taskId = await submitTask('audio', {
+          model,
+          text: tts,
+          voice_id,
+          ...(speed != null ? { voice_setting: { voice_id, speed } } : {}),
+        })
+        return await taskResult(taskId, await pollTask('audio', taskId, wait_seconds), false)
+      } catch (e) { return fail(e) }
+    },
+  )
+
+  if (runtime.remote) {
+    server.tool(
+      'get_upload_url',
+      'Hosted server only. When the image or video the user wants to use is a file on their machine, call this, run the returned curl command in their shell, and pass the "url" it prints as image_url (or any other input URL). The link works for 15 minutes and only uploads; it cannot spend credits.',
+      {
+        filename: z.string().describe('The file name with extension, e.g. photo.png or clip.mp4 — used to set the file type.'),
+      },
+      { title: 'Get upload URL', ...READ_ONLY },
+      async ({ filename }) => {
+        try {
+          const name = basename(filename).replace(/[^\w.\-]/g, '_').slice(0, 120) || 'upload.bin'
+          const base = (process.env.MCP_PUBLIC_URL || '').replace(/\/$/, '')
+          const url = `${base}/upload/${makeUploadToken(requireKey())}?name=${encodeURIComponent(name)}`
+          return text(`Upload link (valid ${UPLOAD_TTL_MS / 60_000} minutes):\n${url}\n\nRun:\ncurl -sS -T "<path to ${name}>" "${url}"\n\nIt prints {"url": "https://…"} — pass that URL to the generation tool.`)
+        } catch (e) { return fail(e) }
+      },
+    )
+  }
+
+  return server
+}
 
 async function main() {
   if (!resolveKey()) console.error(`[apimodels-mcp] warning: ${NO_KEY_MSG}`)
   const transport = new StdioServerTransport()
-  await server.connect(transport)
+  await buildServer().connect(transport)
   console.error('[apimodels-mcp] ready (stdio). Base URL:', BASE_URL)
 }
 
 // `apimodels-mcp login | logout | status` — a terminal command, not the server.
 const cmd = process.argv[2]
-if (cmd && CLI_COMMANDS.has(cmd)) {
+if (cmd === 'serve') {
+  // Hosted mode: `apimodels-mcp serve [--port 8095]` (env MCP_PUBLIC_URL, MCP_AUTH_SERVER, MCP_UPLOAD_SECRET, MCP_HOST)
+  runtime.remote = true
+  runtime.waitCap = REMOTE_WAIT_CAP_S
+  const i = process.argv.indexOf('--port')
+  const port = Number(i > 0 ? process.argv[i + 1] : process.env.PORT) || 8095
+  process.env.MCP_PUBLIC_URL ||= `http://localhost:${port}`
+  import('./http.js').then(({ serve }) => serve({ buildServer, requestKey, apiBaseUrl: BASE_URL, uploadBytes, guessMime }, port)).catch((e) => {
+    console.error('[apimodels-mcp] fatal:', e)
+    process.exit(1)
+  })
+} else if (cmd && CLI_COMMANDS.has(cmd)) {
   runCli(cmd, process.argv.slice(3), BASE_URL).then((code) => process.exit(code), (e) => {
     console.error(e instanceof Error ? e.message : e)
     process.exit(1)
