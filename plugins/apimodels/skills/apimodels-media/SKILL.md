@@ -39,13 +39,13 @@ The tools come from a small local server that runs on Node.js. If none of them a
    - Linux: the distribution's package manager (`sudo apt install nodejs npm`, `sudo dnf install nodejs`).
    - If you cannot run commands or reach the network, give the user https://nodejs.org/en/download and the same steps.
 3. After Node.js is installed, the user must **restart the agent app** (Codex, Claude Code, …) so the apimodels server starts.
-4. **Node.js is there but the tools are still missing:** run `npx -y apimodels-mcp status`. It reports whether an API key is configured and whether it works. If there is no key, the user runs `npx -y apimodels-mcp login` in their own terminal (it asks for the key, checks it and saves it); no restart is needed after that.
+4. **Node.js is there but the tools are still missing:** run `npx -y apimodels-mcp status`. It reports whether an API key is configured and whether it works. If there is no key, sign the user in as described in rule 3.
 
 ## Rules
 
 1. **Generation is asynchronous.** A `generate_*` call waits up to `wait_seconds` (default 50). If the job is not done it returns `STILL RUNNING` and a task id: call `get_task` with that id until it returns the URL. Never submit the same job again — that bills twice. Video takes a median of about 2.5 minutes, 9 in 10 within 8 minutes.
 2. **Ask before spending at volume.** One image or one clip the user asked for: just do it. More than three videos, or anything the user did not ask for explicitly: list what you will render and ask first. To estimate cost, check `get_balance` before and after the first item and multiply; prices per model are on `https://apimodels.app/models/<model-id>`. Do not make up prices.
-3. **Never handle the key in chat.** If a tool says no API key is configured, tell the user to run `npx -y apimodels-mcp login` in a terminal (keys: https://apimodels.app/console/api-keys). Do not ask them to paste the key into the conversation.
+3. **Signing in — never handle the key in chat.** If a tool says no API key is configured, run `npx -y apimodels-mcp login` yourself (it needs network access and keeps running until the user approves). It opens apimodels.app in the user's browser; tell them to sign in there if asked and click **Authorize**. A new key is created and saved on this machine; the tools work right away, no restart. If the browser cannot open (remote or headless machine), it prints a link for the user to open. Never ask the user to paste a key into the conversation.
 4. **Files.** `image_url` accepts a public URL, a local file path or a data URI; local files are uploaded for you. When working in a project, download every result into it right away (`curl -L -o assets/shot01.mp4 <url>`) — result links are not permanent.
 5. **People.** Some video models reject photos of real people as a reference or first frame (Seedance in particular). Use a generated character or another model instead of retrying the same photo.
 

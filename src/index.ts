@@ -6,7 +6,7 @@
  * MCP client (Claude Desktop, Cursor, …) can call every apimodels model with a
  * single API key.
  *
- * API key (0.5.0): `npx -y apimodels-mcp login` stores it in ~/.apimodels/credentials.json,
+ * API key: `npx -y apimodels-mcp login` (browser authorization, 0.6.0) stores it in ~/.apimodels/credentials.json,
  * or set APIMODELS_API_KEY (used first). See credentials.ts for why the file exists.
  *
  * Config (environment variables):
@@ -53,7 +53,7 @@ const POLL_INTERVAL_MS = 3_000
 // time, so a `login` done while the agent is running takes effect immediately.
 // The message is read by the agent: it must send the user to a terminal, never ask
 // them to paste the key into the chat.
-const NO_KEY_MSG = `No apimodels API key found. Ask the user to run \`npx -y apimodels-mcp login\` in a terminal (it verifies the key and stores it locally; no restart needed), or to set APIMODELS_API_KEY for this MCP server. Do not ask the user to paste the key into the chat. Keys: ${KEYS_URL}`
+const NO_KEY_MSG = `No apimodels API key found. Run \`npx -y apimodels-mcp login\` (you can run it for the user): it opens apimodels.app in their browser, they click Authorize, and the key is saved on this machine — nothing to copy or paste, no restart needed. Do not ask the user to paste a key into the chat. Keys: ${KEYS_URL}`
 
 function requireKey(): string {
   const k = resolveKey()
@@ -343,7 +343,7 @@ const waitSecondsParam = (what: string) =>
     `How long to wait for the ${what} before returning a task id instead (seconds, 0–${MAX_WAIT_S}). Default ${DEFAULT_WAIT_S}: Codex aborts tool calls at 60 s unless tool_timeout_sec is raised. In Claude Code / Claude Desktop you can pass up to ${MAX_WAIT_S} to get the URL in one call.`,
   )
 
-const server = new McpServer({ name: 'apimodels-mcp', version: '0.5.0' })
+const server = new McpServer({ name: 'apimodels-mcp', version: '0.6.0' })
 
 /**
  * Tool annotations (MCP spec). Clients use them to decide whether a call needs the user's OK:

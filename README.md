@@ -8,11 +8,11 @@ One key unlocks GPT-5.5, Claude, Gemini, GLM, DeepSeek, Qwen, Seedance, Veo, Kli
 
 Coding agents are good at planning — scripts, shot lists, prompts, editing with ffmpeg. The **apimodels plugin** gives them the part they cannot do: rendering the video, images and voice-over. It bundles this MCP server plus a skill that teaches the agent when to use it, how to pick a model, how to wait for long renders and when to ask before spending.
 
-1. **Save your API key once** (needs [Node.js](https://nodejs.org/en/download) 18+; get a key at <https://apimodels.app/console/api-keys>):
+1. **Sign in once** (needs [Node.js](https://nodejs.org/en/download) 18+):
    ```bash
    npx -y apimodels-mcp login
    ```
-   It checks the key and stores it in `~/.apimodels/credentials.json`, where every client finds it — including desktop apps that do not see your shell's environment variables.
+   Your browser opens apimodels.app; click **Authorize**. A key named `CLI · <date>` is created for this machine and stored in `~/.apimodels/credentials.json`, where every client finds it — including desktop apps that do not see your shell's environment variables. Nothing to copy or paste, and the agent can run this step for you. On a machine without a browser use `--no-browser` (prints the link) or `--paste` (paste a key from <https://apimodels.app/console/api-keys>).
 2. **Install the plugin.**
    - Claude Code (2.1.275 or later):
      ```
@@ -79,7 +79,7 @@ Uploads land in your account's R2 space and are auto-deleted after 7 days.
 
 ## Setup
 
-1. Get an API key at <https://apimodels.app/console/api-keys> (it looks like `sk_…`) and save it with `npx -y apimodels-mcp login` — or put it in the server's environment as `APIMODELS_API_KEY`, as the examples below do.
+1. Run `npx -y apimodels-mcp login` and click **Authorize** in the browser — or create a key at <https://apimodels.app/console/api-keys> (it looks like `sk_…`) and put it in the server's environment as `APIMODELS_API_KEY`, as the examples below do.
 2. Add the server to your MCP client. `npx -y apimodels-mcp status` shows which key is in use and your balance.
 
 ### Claude Desktop

@@ -11,13 +11,27 @@
  * Lookup order: APIMODELS_API_KEY (non-empty) → the credentials file. The file is read
  * again whenever no key is cached, so logging in while an agent is running works
  * without restarting it.
+ *
+ * `login` (0.6.0) authorizes in the browser — nothing to copy or paste, and an agent can run
+ * it for the user: we listen on 127.0.0.1:<random port>, open
+ * https://apimodels.app/cli-auth?port=…&state=…, the signed-in user clicks Authorize, the site
+ * redirects to http://127.0.0.1:<port>/callback?code=…&state=… (RFC 8252 loopback), and we trade
+ * the one-time code (128-bit, 10 min, single use) for a new key named "CLI · <date>" at
+ * POST /api/cli-auth/exchange. The key never appears in a URL, a page or a chat. The state we
+ * generate must come back unchanged, so a page that is not ours cannot push a code to us.
+ * `--key sk_…` and `--stdin` remain for scripts and headless machines.
  */
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync, chmodSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { createInterface } from 'node:readline'
+import { createServer } from 'node:http'
+import { randomBytes } from 'node:crypto'
+import { spawn } from 'node:child_process'
 
 export const KEYS_URL = 'https://apimodels.app/console/api-keys'
+const SITE_URL = (process.env.APIMODELS_SITE_URL || 'https://apimodels.app').replace(/\/$/, '')
+const AUTH_TIMEOUT_MS = 10 * 60_000
 
 export function credentialsPath(): string {
   return process.env.APIMODELS_CREDENTIALS_FILE || join(homedir(), '.apimodels', 'credentials.json')
@@ -78,10 +92,76 @@ async function readSecret(prompt: string): Promise<string> {
 
 const say = (s: string) => process.stdout.write(`${s}\n`)
 
+function openBrowser(url: string): void {
+  // rundll32 on Windows: `start` would split the URL at "&"
+  const [cmd, args] = process.platform === 'darwin' ? ['open', [url]]
+    : process.platform === 'win32' ? ['rundll32', ['url.dll,FileProtocolHandler', url]]
+      : ['xdg-open', [url]]
+  try {
+    const child = spawn(cmd as string, args as string[], { stdio: 'ignore', detached: true })
+    child.on('error', () => { /* no browser: the URL is printed anyway */ })
+    child.unref()
+  } catch { /* same */ }
+}
+
+const PAGE = (title: string, body: string) => `<!doctype html><meta charset="utf-8"><title>${title}</title>
+<body style="font-family:system-ui,sans-serif;background:#0b0b0c;color:#eee;display:flex;min-height:90vh;align-items:center;justify-content:center">
+<div style="max-width:420px;text-align:center"><h2>${title}</h2><p style="color:#aaa">${body}</p></div></body>`
+
+/** Browser authorization: returns a fresh API key, or throws with a message for the user. */
+async function browserLogin(noBrowser: boolean): Promise<string> {
+  const state = randomBytes(16).toString('hex')
+  let settle!: (r: { code?: string; error?: string }) => void
+  const result = new Promise<{ code?: string; error?: string }>((r) => { settle = r })
+  const server = createServer((req, res) => {
+    const u = new URL(req.url || '/', 'http://127.0.0.1')
+    if (u.pathname !== '/callback') { res.writeHead(404).end(); return }
+    const code = u.searchParams.get('code') || ''
+    if (u.searchParams.get('state') !== state || !/^[0-9a-f]{32}$/.test(code)) {
+      res.writeHead(400, { 'Content-Type': 'text/html; charset=utf-8' })
+        .end(PAGE('Authorization failed / 授权失败', 'This link does not match the login that is waiting. Run <code>apimodels-mcp login</code> again. / 链接与正在等待的登录不匹配,请重新运行登录命令。'))
+      return
+    }
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
+      .end(PAGE('Authorized / 授权完成', 'You can close this tab and go back to your agent. / 可以关闭此页面,回到你的智能体继续。'))
+    settle({ code })
+  })
+  await new Promise<void>((r, j) => { server.once('error', j); server.listen(0, '127.0.0.1', () => r()) })
+  const port = (server.address() as { port: number }).port
+  const url = `${SITE_URL}/cli-auth?port=${port}&state=${state}`
+  say('Authorize apimodels in your browser (sign in there if asked, then click Authorize):')
+  say(`  ${url}`)
+  if (!noBrowser) openBrowser(url)
+  say('Waiting for authorization… (Ctrl+C to cancel)')
+  const timer = setTimeout(() => settle({ error: 'Timed out after 10 minutes without authorization.' }), AUTH_TIMEOUT_MS)
+  const got = await result
+  clearTimeout(timer)
+  server.close()
+  if (!got.code) throw new Error(got.error || 'Authorization did not complete.')
+  const res = await fetch(`${SITE_URL}/api/cli-auth/exchange`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: got.code }),
+  })
+  const j: any = await res.json().catch(() => ({}))
+  const key = j?.data?.apiKey
+  if (!res.ok || typeof key !== 'string') throw new Error(`Could not finish authorization (${j?.msg || `HTTP ${res.status}`}). Run the login command again.`)
+  return key
+}
+
 export async function runCli(cmd: string, args: string[], baseUrl: string): Promise<number> {
   if (cmd === 'login') {
     const i = args.indexOf('--key')
-    const key = i >= 0 ? (args[i + 1] || '').trim() : await readSecret(`Paste your apimodels API key (from ${KEYS_URL}): `)
+    let key: string
+    if (i >= 0) key = (args[i + 1] || '').trim()
+    else if (args.includes('--stdin') || args.includes('--paste')) key = await readSecret(`Paste your apimodels API key (from ${KEYS_URL}): `)
+    else {
+      try {
+        key = await browserLogin(args.includes('--no-browser'))
+      } catch (e) {
+        say(e instanceof Error ? e.message : String(e))
+        say(`Alternatively create a key at ${KEYS_URL} and run: npx -y apimodels-mcp login --paste`)
+        return 1
+      }
+    }
     if (!/^sk[_-][A-Za-z0-9_-]{8,}$/.test(key)) {
       say('That does not look like an apimodels API key (they start with sk_). Nothing was saved.')
       return 1
@@ -124,7 +204,9 @@ export async function runCli(cmd: string, args: string[], baseUrl: string): Prom
       return 1
     }
   }
-  say('Usage: apimodels-mcp [login [--key sk_…] | logout | status]   (no argument: run the MCP server on stdio)')
+  say('Usage: apimodels-mcp login [--no-browser | --paste | --stdin | --key sk_…] | logout | status')
+  say('  login           authorize in the browser (default); --paste prompts for a key; --stdin reads one; --key passes one')
+  say('  (no argument)   run the MCP server on stdio')
   return cmd === 'help' || cmd === '--help' || cmd === '-h' ? 0 : 1
 }
 
