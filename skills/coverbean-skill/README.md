@@ -63,7 +63,7 @@ The prompt recipe (short quoted title, one bold subject, high contrast, per-plat
 
 ## Notes
 
-- Generated files on apimodels.app expire after **30 days** — the script downloads them locally right away.
+- Generated files on apimodels.app expire after **7 days** — the script downloads them locally right away.
 - Estimate cost at <https://apimodels.app/tools>; browse all models at <https://apimodels.app/models>.
 
 ---

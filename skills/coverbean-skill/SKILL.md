@@ -83,5 +83,5 @@ Defaults: `--model gpt-image-2-all`, `--quality low`, `--resolution 1K`. Raise `
 
 - The script prints the saved path for each platform (`{platform}-cover.png`), plus a `-raw.png` before cropping.
 - For portrait platforms (抖音/TikTok/小红书) the prompt should compose the subject and title **vertically**; for YouTube/公众号, **horizontally**. When doing `--platform all`, a single prompt works, but a per-orientation prompt looks best.
-- Generated files on apimodels.app expire after **30 days** — the script downloads them locally immediately, so keep the local copies.
+- Generated files on apimodels.app expire after **7 days** — the script downloads them locally immediately, so keep the local copies.
 - Estimate cost first at <https://apimodels.app/tools>; browse models at <https://apimodels.app/models>.

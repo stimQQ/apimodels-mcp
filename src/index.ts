@@ -273,7 +273,7 @@ function runningText(taskId: string, s: Extract<TaskState, { state: 'running' }>
   return [
     `STILL RUNNING — ${KIND_LABEL[s.kind]} task ${taskId}, ${s.elapsedS}s elapsed.`,
     `Typical ${KIND_LABEL[s.kind]} generation: median ${t.p50}s, 9 in 10 finish within ${t.p90}s.`,
-    `Next: call get_task with task_id "${taskId}" (it waits up to wait_seconds, default ${DEFAULT_WAIT_S}). Do NOT submit the job again — this task keeps running, is billed once when it completes, and its result stays retrievable for 30 days.`,
+    `Next: call get_task with task_id "${taskId}" (it waits up to wait_seconds, default ${DEFAULT_WAIT_S}). Do NOT submit the job again — this task keeps running, is billed once when it completes, and its result stays retrievable for 7 days.`,
   ].join('\n')
 }
 
@@ -422,10 +422,10 @@ export function buildServer(): McpServer {
 
   server.tool(
     'chat',
-    'Chat / text completion with any LLM on apimodels.app (GPT-6.1, Claude, Gemini, GLM, DeepSeek, Qwen, …). Returns the assistant reply text.',
+    'Chat / text completion with any LLM on apimodels.app (GPT-5.5, Claude, Gemini, GLM, DeepSeek, Qwen, …). Returns the assistant reply text.',
     {
       prompt: z.string().describe('The user message / prompt.'),
-      model: z.string().default('gpt-6.1-sol').describe('Model id, e.g. gpt-6.1-sol, gpt-6-sol, claude-opus-5-5, claude-sonnet-5-5 (Claude Sonnet 5.5, fast and strong at coding and agent work, $1.20 / $6 per 1M tokens), claude-sonnet-5, gemini-3-pro-preview, deepseek-v4-pro. Call list_models for the full list.'),
+      model: z.string().default('gpt-5-5').describe('Model id, e.g. gpt-5-5, gpt-6.1-sol, gpt-6-sol, claude-opus-5-5, claude-sonnet-5-5 (Claude Sonnet 5.5, fast and strong at coding and agent work, $1.20 / $6 per 1M tokens), claude-sonnet-5, gemini-3-pro-preview, deepseek-v4-pro. Call list_models for the full list.'),
       system: z.string().optional().describe('Optional system prompt.'),
       max_tokens: z.number().int().positive().optional().describe('Optional max output tokens.'),
     },
@@ -448,7 +448,7 @@ export function buildServer(): McpServer {
 
   server.tool(
     'generate_image',
-    'Generate an image from a text prompt (or edit an input image). Returns the URL(s) of the generated image, valid 30 days, plus a downscaled preview of the image itself when the client can show tool-result images to you. Images take about 50 s (9 in 10 within 90 s); if the task is still running when wait_seconds is up you get a task id — call get_task with it, do not resubmit. If you cannot see the image in the result, call review_image with the returned URL to get a written critique and a revised prompt, then generate again. Roughly $0.025 per image on the default model; gpt-image-2-lite is $0.008.',
+    'Generate an image from a text prompt (or edit an input image). Returns the URL(s) of the generated image, valid 7 days, plus a downscaled preview of the image itself when the client can show tool-result images to you. Images take about 50 s (9 in 10 within 90 s); if the task is still running when wait_seconds is up you get a task id — call get_task with it, do not resubmit. If you cannot see the image in the result, call review_image with the returned URL to get a written critique and a revised prompt, then generate again. Roughly $0.025 per image on the default model; gpt-image-2-lite is $0.008.',
     {
       prompt: z.string().optional().describe('Text description of the image to generate (or the edit to make). Required, except with layer_decomposition where it is optional.'),
       model: z.string().default('gpt-image-2').describe('Image model id, e.g. gpt-image-2, gpt-image-2.5-flare, flux-2-klein-4b ($0.006, fastest, up to 3 reference images), gpt-image-2-lite, gemini-3-pro-image, gemini-3-pro-image-gemini ($0.03 flat), qwen3-image (small in-image text), gemini-3.1-flash-image, nano-banana-2-1 (Google Nano Banana 2.1: $0.024 1K / $0.04 2K / $0.064 4K, accurate in-image text, 15 aspect ratios incl. 21:9 and 1:8), doubao-seedream-5-0-flash ($0.03, fast, 1K/2K; supports background and layer_decomposition), doubao-seedream-5-0-pro ($0.03 1K / $0.06 2K, precise region edits).'),
@@ -513,10 +513,10 @@ export function buildServer(): McpServer {
 
   server.tool(
     'generate_video',
-    'Generate a video from a text prompt (and optional reference image). Submits the job and waits up to wait_seconds: returns the video URL(s) (valid 30 days) if it finishes in time, otherwise a task id — then call get_task with that id; never resubmit a running task. Video takes a median 2.5 minutes and 9 in 10 finish within 8 minutes, so expect one or two get_task calls. Video is the most expensive modality here — the default model costs roughly $0.30-$0.50 per clip; pass model:"veo-3.1-fast-fhd" for a flat $0.088 per 8-second 1080p clip.',
+    'Generate a video from a text prompt (and optional reference image). Submits the job and waits up to wait_seconds: returns the video URL(s) (valid 7 days) if it finishes in time, otherwise a task id — then call get_task with that id; never resubmit a running task. Video takes a median 2.5 minutes and 9 in 10 finish within 8 minutes, so expect one or two get_task calls. Video is the most expensive modality here — the default model costs roughly $0.30-$0.50 per clip; pass model:"veo-3.1-fast-fhd" for the cheapest option at $0.07 flat.',
     {
       prompt: z.string().describe('Text description of the video.'),
-      model: z.string().default('seedance-2.0-fast').describe('Video model id. Use the dotted public names: seedance-2.0-fast, seedance-2.0, seedance-2.0-mini, seedance-2.5, wan-3.0-video, minimax-h3, minimax-h3-lite (low cost, up to 768p), ltx-2.3, grok-imagine-video-1.5, veo-3.1-fast-fhd ($0.088 flat), veo-3.1, kling-v2-6. Call list_models for the full list.'),
+      model: z.string().default('seedance-2.0-fast').describe('Video model id. Use the dotted public names: seedance-2.0-fast, seedance-2.0, seedance-2.0-mini, seedance-2.5, wan-3.0-video, minimax-h3, minimax-h3-lite (low cost, up to 768p), ltx-2.3, grok-imagine-video-1.5, veo-3.1-fast-fhd ($0.07 flat), veo-3.1, kling-v2-6. Call list_models for the full list.'),
       aspect_ratio: z.string().optional().describe('Optional aspect ratio, e.g. 16:9, 9:16, 1:1.'),
       resolution: z.string().optional().describe('Optional resolution, e.g. 480p, 720p, 1080p.'),
       duration: z.union([z.number(), z.string()]).optional().describe('Optional duration in seconds, e.g. 5 or 10.'),
@@ -577,7 +577,7 @@ export function buildServer(): McpServer {
    */
   server.tool(
     'text_to_speech',
-    'Convert text to speech (MiniMax voices). Returns the audio file URL (valid 30 days). Costs about $0.004 for a short line; billed at $0.04 per 1000 characters.',
+    'Convert text to speech (MiniMax voices). Returns the audio file URL (valid 7 days). Costs about $0.004 for a short line; billed at $0.04 per 1000 characters.',
     {
       text: z.string().describe('The text to speak.'),
       model: z
