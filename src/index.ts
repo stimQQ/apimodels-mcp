@@ -448,10 +448,10 @@ export function buildServer(): McpServer {
 
   server.tool(
     'generate_image',
-    'Generate an image from a text prompt (or edit an input image). Returns the URL(s) of the generated image, valid 30 days, plus a downscaled preview of the image itself when the client can show tool-result images to you. Images take about 50 s (9 in 10 within 90 s); if the task is still running when wait_seconds is up you get a task id — call get_task with it, do not resubmit. If you cannot see the image in the result, call review_image with the returned URL to get a written critique and a revised prompt, then generate again. Roughly $0.025 per image on the default model; gpt-image-2-lite is $0.008.',
+    'Generate an image from a text prompt (or edit an input image). Returns the URL(s) of the generated image, valid 30 days, plus a downscaled preview of the image itself when the client can show tool-result images to you. Images take about 50 s (9 in 10 within 90 s); if the task is still running when wait_seconds is up you get a task id — call get_task with it, do not resubmit. If you cannot see the image in the result, call review_image with the returned URL to get a written critique and a revised prompt, then generate again. Roughly $0.025 per image on the default model; gpt-image-2-lite is $0.01.',
     {
       prompt: z.string().optional().describe('Text description of the image to generate (or the edit to make). Required, except with layer_decomposition where it is optional.'),
-      model: z.string().default('gpt-image-2').describe('Image model id, e.g. gpt-image-2, gpt-image-2.5-flare, flux-2-klein-4b ($0.006, fastest, up to 3 reference images), gpt-image-2-lite, gemini-3-pro-image, gemini-3-pro-image-gemini ($0.03 flat), qwen3-image (small in-image text), gemini-3.1-flash-image, nano-banana-2-1 (Google Nano Banana 2.1: $0.024 1K / $0.04 2K / $0.064 4K, accurate in-image text, 15 aspect ratios incl. 21:9 and 1:8), doubao-seedream-5-0-flash ($0.03, fast, 1K/2K; supports background and layer_decomposition), doubao-seedream-5-0-pro ($0.03 1K / $0.06 2K, precise region edits).'),
+      model: z.string().default('gpt-image-2').describe('Image model id, e.g. gpt-image-2, gpt-image-2.5-flare, flux-2-klein-4b ($0.006, fastest, up to 3 reference images), gpt-image-2-lite, gemini-3-pro-image, gemini-3-pro-image-gemini ($0.03 flat), qwen3-image (small in-image text), gemini-3.1-flash-image, nano-banana-2-1 (Google Nano Banana 2.1: $0.022 1K / $0.036 2K / $0.06 4K, accurate in-image text, 15 aspect ratios incl. 21:9 and 1:8), doubao-seedream-5-0-flash ($0.03, fast, 1K/2K; supports background and layer_decomposition), doubao-seedream-5-0-pro ($0.03 1K / $0.06 2K, precise region edits).'),
       aspect_ratio: z.string().optional().describe('Optional aspect ratio, e.g. 1:1, 16:9, 9:16.'),
       resolution: z.string().optional().describe('Optional resolution, e.g. 1K, 2K, 4K.'),
       image_url: z.string().optional().describe('Optional input image for image-to-image edits. Accepts a public https:// URL, a LOCAL FILE PATH, a localhost URL, or a data: URI — local sources are uploaded for you automatically.'),
@@ -485,7 +485,7 @@ export function buildServer(): McpServer {
     {
       image_url: z.string().describe('The image to review: a URL returned by generate_image, any public https:// URL, a LOCAL FILE PATH, a localhost URL, or a data: URI.'),
       brief: z.string().describe('What the image is supposed to show — usually the prompt it was generated from, plus any requirements the user stated (exact text, aspect ratio, style).'),
-      model: z.string().default('gpt-5.6-luna').describe('Vision-capable chat model that does the looking. gpt-5.6-luna (default, cheapest) or claude-sonnet-5 for a more careful read.'),
+      model: z.string().default('gpt-5.6-luna').describe('Vision-capable chat model that does the looking. gpt-5.6-luna (default, lowest price) or claude-sonnet-5 for a more careful read.'),
     },
     { title: 'Review image', ...BILLABLE },
     async ({ image_url, brief, model }) => {
@@ -513,10 +513,10 @@ export function buildServer(): McpServer {
 
   server.tool(
     'generate_video',
-    'Generate a video from a text prompt (and optional reference image). Submits the job and waits up to wait_seconds: returns the video URL(s) (valid 30 days) if it finishes in time, otherwise a task id — then call get_task with that id; never resubmit a running task. Video takes a median 2.5 minutes and 9 in 10 finish within 8 minutes, so expect one or two get_task calls. Video is the most expensive modality here — the default model costs roughly $0.30-$0.50 per clip; pass model:"veo-3.1-fast-fhd" for a flat $0.088 per 8-second 1080p clip.',
+    'Generate a video from a text prompt (and optional reference image). Submits the job and waits up to wait_seconds: returns the video URL(s) (valid 30 days) if it finishes in time, otherwise a task id — then call get_task with that id; never resubmit a running task. Video takes a median 2.5 minutes and 9 in 10 finish within 8 minutes, so expect one or two get_task calls. Video is the most expensive modality here — the default model is billed per second ($0.071/s at 480p, $0.153/s at 720p, so a 5-second 480p clip is about $0.36); pass model:"veo-3.1-fast-fhd" for a flat $0.088 per 8-second 1080p clip.',
     {
       prompt: z.string().describe('Text description of the video.'),
-      model: z.string().default('seedance-2.0-fast').describe('Video model id. Use the dotted public names: seedance-2.0-fast, seedance-2.0, seedance-2.0-mini, seedance-2.5, wan-3.0-video, minimax-h3, minimax-h3-lite (low cost, up to 768p), ltx-2.3, grok-imagine-video-1.5, veo-3.1-fast-fhd ($0.088 flat), veo-3.1, kling-v2-6. Call list_models for the full list.'),
+      model: z.string().default('seedance-2.0-fast').describe('Video model id. Use the dotted public names: seedance-2.0-fast, seedance-2.0, seedance-2.0-mini, seedance-2.5, wan-3.0-video, minimax-h3, minimax-h3-lite (from $0.01/s, up to 768p), ltx-2.3, grok-imagine-video-1.5, veo-3.1-fast-fhd ($0.088 flat), veo-3.1, kling-v2-6. Call list_models for the full list.'),
       aspect_ratio: z.string().optional().describe('Optional aspect ratio, e.g. 16:9, 9:16, 1:1.'),
       resolution: z.string().optional().describe('Optional resolution, e.g. 480p, 720p, 1080p.'),
       duration: z.union([z.number(), z.string()]).optional().describe('Optional duration in seconds, e.g. 5 or 10.'),
