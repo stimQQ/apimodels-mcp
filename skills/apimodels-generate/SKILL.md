@@ -33,7 +33,7 @@ APIMODELS_API_KEY=$APIMODELS_API_KEY node scripts/generate.mjs \
   --type image --prompt "a red fox in snow, cinematic" --model gpt-image-2 --aspect_ratio 16:9
 ```
 
-- Common image models: `gpt-image-2` ($0.025), `gpt-image-2-lite` ($0.008, cheapest), `gemini-3-pro-image`, `gemini-2.5-flash-image`.
+- Common image models: `gpt-image-2` ($0.025), `gpt-image-2-lite` ($0.01, lowest price), `gemini-3-pro-image`, `gemini-2.5-flash-image`.
 - Optional: `--aspect_ratio` (1:1, 16:9, 9:16), `--resolution` (1K, 2K, 4K), `--image_url` (for image-to-image edits).
 
 ### Generate a video

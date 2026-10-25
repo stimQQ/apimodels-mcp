@@ -14,7 +14,7 @@ Turn a topic (or an exact title) into a **platform-ready cover image** — sized
 Coverbean renders through [apimodels.app](https://apimodels.app). The user needs an account with a little credit + an API key. It takes about a minute:
 
 1. **Sign up** at <https://apimodels.app>.
-2. **Add a little credit** — covers are cheap: a 1K cover is **$0.005**, so **$1 ≈ 200 covers**.
+2. **Add a little credit** — covers are affordable: a 1K cover is **$0.01**, so **$1 ≈ 100 covers**.
 3. **Create an API key** at <https://apimodels.app/console/api-keys> and copy it (it starts with `sk-`).
 4. **Export it** in the shell that will run the skill:
    ```bash
