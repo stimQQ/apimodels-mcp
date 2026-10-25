@@ -40,6 +40,7 @@ The same tools run at **`https://api.apimodels.app/mcp`** (Streamable HTTP). Not
   url = "https://api.apimodels.app/mcp"
   ```
 - **Claude Code** — `claude mcp add --transport http apimodels https://api.apimodels.app/mcp`, then `/mcp` → apimodels → Authenticate.
+- **Cline** — `cline mcp install apimodels --transport http https://api.apimodels.app/mcp`, or in VS Code add `{"type": "streamableHttp", "url": "https://api.apimodels.app/mcp"}` under `mcpServers.apimodels` in `cline_mcp_settings.json` and authorize. Step-by-step guide for agents: [llms-install.md](llms-install.md).
 - **ChatGPT, Claude.ai, Cursor and other clients that take a remote MCP URL** — add it as a custom connector with this URL and sign in when asked.
 
 Differences from the local server: the hosted one cannot read files on your machine — the agent calls `get_upload_url`, uploads the file with `curl -T` and passes the returned URL instead (local paths are refused with that hint) — and each call waits at most 50 seconds before handing back a task id for `get_task`. Signed in with a plain API key instead? Send it as `Authorization: Bearer sk_…`.
