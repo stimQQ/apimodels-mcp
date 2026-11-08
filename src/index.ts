@@ -788,9 +788,10 @@ export function buildServer(): McpServer {
 
   server.tool(
     'list_voices',
-    'Search the voice library for text_to_speech: MiniMax, ElevenLabs and Fish voices with name, language, gender and a preview URL. Free. Pass the returned id as voice_id.',
+    'Search the voices for text_to_speech: the library of 12,000+ MiniMax, ElevenLabs and Fish voices (name, language, gender, preview URL), the Kling voices for kling-tts (provider "kling"), or your own cloned voices (mine: true). Free. Pass the returned id as voice_id.',
     {
-      provider: z.enum(['minimax', 'elevenlabs', 'fish']).optional().describe('Only voices for this TTS family (minimax-speech-*, eleven-tts-*, fish-*).'),
+      provider: z.enum(['minimax', 'elevenlabs', 'fish', 'kling']).optional().describe('Only voices for this TTS family (minimax-speech-*, eleven-tts-*, fish-*, kling-tts). Kling voices come from their own list (language filter only).'),
+      mine: z.boolean().optional().describe('List only your own voices: ElevenLabs and Fish clones from clone_voice, and Kling custom voices made on apimodels.app. MiniMax clones are not listable — keep the voice_id clone_voice returned.'),
       language: z.string().optional().describe('ISO 639-1 language code, e.g. en, zh, ja, es.'),
       gender: z.string().optional().describe('e.g. male, female.'),
       q: z.string().optional().describe('Free-text search on name / description, e.g. "warm narrator" or "news".'),
@@ -798,8 +799,23 @@ export function buildServer(): McpServer {
       page_size: z.number().int().min(1).max(100).optional().describe('Results per page (default 20, max 100).'),
     },
     { title: 'List voices', ...READ_ONLY },
-    async ({ provider, language, gender, q, page, page_size }) => {
+    async ({ provider, mine, language, gender, q, page, page_size }) => {
       try {
+        // Kling (kling-tts) keeps its own list: presets plus your custom voices, each tagged category custom | preset.
+        const klingVoices = async () => {
+          const res = await apiFetch(`/kling/voices${language ? `?language=${encodeURIComponent(language)}` : ''}`)
+          const voices: any[] = res?.data?.voices ?? []
+          return mine ? voices.filter((v) => v?.category === 'custom') : voices
+        }
+        if (mine) {
+          if (provider === 'minimax') throw new Error('MiniMax cloned voices are not listable — use the voice_id that clone_voice returned.')
+          const out: Record<string, unknown> = {}
+          if (!provider || provider === 'elevenlabs') out.elevenlabs = (await apiFetch('/audio/voices/eleven'))?.data ?? []
+          if (!provider || provider === 'fish') out.fish = (await apiFetch('/audio/voices/fish'))?.data ?? []
+          if (!provider || provider === 'kling') out.kling = await klingVoices()
+          return text(json(out))
+        }
+        if (provider === 'kling') return text(json(await klingVoices()))
         const qs = new URLSearchParams()
         if (provider) qs.set('provider', provider)
         if (language) qs.set('language', language)
@@ -809,6 +825,62 @@ export function buildServer(): McpServer {
         qs.set('page_size', String(page_size ?? 20))
         const res = await apiFetch(`/voices/catalog?${qs}`)
         return text(json(res?.data ?? res))
+      } catch (e) { return fail(e) }
+    },
+  )
+
+  /**
+   * Voice cloning — one tool over the four providers' endpoints (verified against apimodels-backend, 2026-11-08):
+   *   minimax    POST /v1/minimax/voice/clone   { voice_url, voice_id? }       $1.41; the id comes back in voice_id
+   *   elevenlabs POST /v1/audio/voices/eleven   { name, sample_url }           free, max 10, kept 24 hours
+   *   fish       POST /v1/audio/voices/fish     { name, sample_url, description? }  first 20 free, then $1 each
+   * Kling custom voices are left out: that route only forwards to an asynchronous upstream job (task id first,
+   * voice id later via GET /v1/audio/voices/{id}) and does not record the voice, so it would not show in list_voices.
+   * MiniMax voice *design* (from a text description, $15.80) is deliberately not exposed: the voices it makes
+   * live on a channel the TTS route no longer uses, so they cannot be spoken yet (owner decision pending).
+   */
+  server.tool(
+    'clone_voice',
+    'Clone a voice from an audio sample (clean speech, ideally 10 s – 3 min, one speaker) and get a voice id for text_to_speech. minimax ($1.41; use the id with minimax-speech-* models), elevenlabs (free, up to 10 voices, each kept 24 hours), fish (first 20 voices free, then $1 each; use the id with fish-* models). Only clone a voice with the speaker\'s consent.',
+    {
+      provider: z.enum(['minimax', 'elevenlabs', 'fish']),
+      sample: z.string().describe('The audio sample: public https:// URL, LOCAL FILE PATH, localhost URL or data: URI (local files up to 10 MB are uploaded for you). mp3, wav or m4a; Fish also takes opus.'),
+      name: z.string().max(100).optional().describe('Display name. Required for elevenlabs and fish.'),
+      voice_id: z.string().optional().describe('minimax only: your own id for the voice, 8–256 characters, starting with a letter (letters, digits, - and _). Generated if omitted.'),
+      description: z.string().max(500).optional().describe('fish only: a short description of the voice.'),
+    },
+    { title: 'Clone voice', ...BILLABLE },
+    async ({ provider, sample, name, voice_id, description }) => {
+      try {
+        if (provider !== 'minimax' && !name) throw new Error(`name is required for ${provider}.`)
+        const url = await resolveMediaInput(sample)
+        const [path, body] =
+          provider === 'minimax' ? ['/minimax/voice/clone', { voice_url: url, ...(voice_id ? { voice_id } : {}) }]
+          : provider === 'elevenlabs' ? ['/audio/voices/eleven', { name, sample_url: url }]
+          : ['/audio/voices/fish', { name, sample_url: url, ...(description ? { description } : {}) }]
+        const res = await apiFetch(path, { method: 'POST', body: JSON.stringify(body) })
+        const hint = {
+          minimax: 'Use voice_id with any minimax-speech-* model in text_to_speech.',
+          elevenlabs: 'Use voice_id with any eleven-tts-* model. The clone is deleted automatically after 24 hours.',
+          fish: 'Use voice_id with fish-s2.1-pro / fish-drama-3 in text_to_speech.',
+        }[provider]
+        return text(`${json(res?.data ?? res)}\n\n${hint}`)
+      } catch (e) { return fail(e) }
+    },
+  )
+
+  server.tool(
+    'delete_voice',
+    'Delete a voice you cloned (elevenlabs or fish). Frees the slot; text_to_speech with that id stops working. MiniMax clones cannot be deleted through the API. Cannot be undone — confirm with the user first.',
+    {
+      provider: z.enum(['elevenlabs', 'fish']),
+      voice_id: z.string().describe('The id from clone_voice or list_voices (mine: true).'),
+    },
+    { title: 'Delete voice', readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
+    async ({ provider, voice_id }) => {
+      try {
+        await apiFetch(`/audio/voices/${provider === 'elevenlabs' ? 'eleven' : 'fish'}/${encodeURIComponent(voice_id)}`, { method: 'DELETE' })
+        return text(`Deleted ${provider} voice ${voice_id}.`)
       } catch (e) { return fail(e) }
     },
   )

@@ -58,6 +58,13 @@ globalThis.fetch = async (input, init = {}) => {
   if (path === '/assets/list') return jsonRes({ code: 'success', data: { items: [], total: 0 } })
   if (path === '/assets/get') return jsonRes({ code: 'success', data: { id: body.id, status: 'Active' } })
   if (path === '/assets/delete') return jsonRes({ code: 'success', data: { id: body.id } })
+  if (path.startsWith('/kling/voices')) return jsonRes({ code: 200, data: { voices: [{ voice_id: 'k-mine', name: 'Mine', category: 'custom' }, { voice_id: 'k-preset', name: 'Preset', category: 'preset' }], total: 2 } })
+  if (path === '/audio/voices/eleven' && method === 'GET') return jsonRes({ code: 200, data: { voices: [{ voice_id: 'cv_1' }] } })
+  if (path === '/audio/voices/fish' && method === 'GET') return jsonRes({ code: 200, data: { voices: [{ voice_id: 'fv_1' }], slots_used: 1 } })
+  if (path === '/audio/voices/eleven' && method === 'POST') return jsonRes({ code: 200, data: { voice_id: 'cv_2', name: body.name } })
+  if (path === '/audio/voices/fish' && method === 'POST') return jsonRes({ code: 200, data: { voice_id: 'fv_2', name: body.name } })
+  if (path === '/minimax/voice/clone') return jsonRes({ voice_id: body.voice_id || 'gen_123', base_resp: { status_code: 0 } })
+  if (method === 'DELETE' && /^\/audio\/voices\/(eleven|fish)\//.test(path)) return jsonRes({ code: 200, data: { deleted: true } })
   if (path === '/balance') return jsonRes({ code: 200, data: { balance: 1, total: 1, frozen: 0 } })
   return jsonRes({ msg: `unmocked ${method} ${path}` }, 404)
 }
@@ -84,11 +91,11 @@ async function call(name, args, apiPath) {
 
 console.log('\n— tool list —')
 const tools = (await client.listTools()).tools.map((t) => t.name).sort()
-const expected = ['chat', 'delete_asset', 'embed', 'extract_media', 'generate_audio', 'generate_image', 'generate_video', 'get_asset', 'get_balance', 'get_task', 'jev_decide', 'list_assets', 'list_models', 'list_voices', 'review_image', 'text_to_speech', 'upload_asset', 'write_lyrics']
-ok(`18 local tools (get_upload_url is hosted-only)`, JSON.stringify(tools) === JSON.stringify(expected), JSON.stringify(tools))
+const expected = ['chat', 'clone_voice', 'delete_asset', 'delete_voice', 'embed', 'extract_media', 'generate_audio', 'generate_image', 'generate_video', 'get_asset', 'get_balance', 'get_task', 'jev_decide', 'list_assets', 'list_models', 'list_voices', 'review_image', 'text_to_speech', 'upload_asset', 'write_lyrics']
+ok(`20 local tools (get_upload_url is hosted-only)`, JSON.stringify(tools) === JSON.stringify(expected), JSON.stringify(tools))
 const annotations = Object.fromEntries((await client.listTools()).tools.map((t) => [t.name, t.annotations || {}]))
 ok('read-only: list_voices, list_assets, get_asset (no approval prompt in Codex)', ['list_voices', 'list_assets', 'get_asset'].every((n) => annotations[n].readOnlyHint === true))
-ok('delete_asset is marked destructive', annotations.delete_asset.destructiveHint === true && annotations.delete_asset.readOnlyHint === false)
+ok('delete_asset / delete_voice are marked destructive', ['delete_asset', 'delete_voice'].every((n) => annotations[n].destructiveHint === true && annotations[n].readOnlyHint === false))
 
 console.log('\n— generate_image —')
 let r = await call('generate_image', {
@@ -173,6 +180,26 @@ r = await call('generate_audio', { model: 'eleven-dialogue', inputs: [{ text: 'H
 ok('dialogue: inputs array', r.req?.body.inputs?.length === 2, JSON.stringify(r.req?.body))
 r = await call('write_lyrics', { prompt: 'summer' }, '/audio/lyrics')
 ok('write_lyrics → /audio/lyrics, title / tags / lyric in the answer', r.req?.body.prompt === 'summer' && /TITLE: Road/.test(r.text) && /la la/.test(r.text), r.text)
+
+console.log('\n— voices: kling list, mine, clone, delete —')
+r = await call('list_voices', { provider: 'kling', language: 'en' })
+ok('provider kling → /kling/voices with language (presets + custom)', r.calls[0]?.url === 'https://api.test/v1/kling/voices?language=en' && /k-preset/.test(r.text) && /k-mine/.test(r.text), r.text)
+r = await call('list_voices', { mine: true })
+ok('mine → own ElevenLabs + Fish clones + Kling custom only (no presets, no catalog)', /cv_1/.test(r.text) && /fv_1/.test(r.text) && /k-mine/.test(r.text) && !/k-preset/.test(r.text) && !r.calls.some((c) => c.url.includes('/voices/catalog')), r.text)
+r = await call('list_voices', { mine: true, provider: 'minimax' })
+ok('mine + minimax → explains clones are not listable', r.isError && /not listable/.test(r.text), r.text)
+r = await call('clone_voice', { provider: 'minimax', sample: localMp3, voice_id: 'Narrator01' }, '/minimax/voice/clone')
+ok('minimax clone: local sample uploaded, sent as voice_url + voice_id', r.req?.body.voice_url === 'https://r2.test/uploads/voice.mp3' && r.req?.body.voice_id === 'Narrator01', JSON.stringify(r.req?.body))
+r = await call('clone_voice', { provider: 'elevenlabs', sample: 'https://cdn.test/s.wav', name: 'Lewis' }, '/audio/voices/eleven')
+ok('elevenlabs clone: name + sample_url, answer says 24 hours', r.req?.body.name === 'Lewis' && r.req?.body.sample_url === 'https://cdn.test/s.wav' && /24 hours/.test(r.text), r.text)
+r = await call('clone_voice', { provider: 'fish', sample: 'https://cdn.test/s.mp3', name: 'Host', description: 'calm' }, '/audio/voices/fish')
+ok('fish clone: name + sample_url + description', r.req?.body.name === 'Host' && r.req?.body.sample_url === 'https://cdn.test/s.mp3' && r.req?.body.description === 'calm', JSON.stringify(r.req?.body))
+r = await call('clone_voice', { provider: 'fish', sample: 'https://cdn.test/s.mp3' })
+ok('fish / elevenlabs clone without name refused before any API call', r.isError && r.calls.length === 0, r.text)
+r = await call('delete_voice', { provider: 'elevenlabs', voice_id: 'cv_2' })
+ok('delete elevenlabs → DELETE /audio/voices/eleven/{id}', r.calls[0]?.method === 'DELETE' && r.calls[0]?.url.endsWith('/audio/voices/eleven/cv_2') && !r.isError, JSON.stringify(r.calls[0]))
+r = await call('delete_voice', { provider: 'fish', voice_id: 'fv 2' })
+ok('delete fish → DELETE /audio/voices/fish/{id} (id URL-encoded)', r.calls[0]?.method === 'DELETE' && r.calls[0]?.url.endsWith('/audio/voices/fish/fv%202'), JSON.stringify(r.calls[0]))
 
 console.log('\n— embed / extract_media / jev_decide —')
 r = await call('embed', { input: ['a', 'b'], model: 'text-embedding-3-large', dimensions: 256 }, '/embeddings')

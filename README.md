@@ -25,7 +25,7 @@ Coding agents are good at planning — scripts, shot lists, prompts, editing wit
      codex plugin add apimodels@apimodels
      ```
      Only have the Codex desktop app and no `codex` command? Use `npx -y @openai/codex` in place of `codex` — it runs the official CLI on the fly and shares the app's config.
-     Then restart Codex. Codex asks you to approve each call that spends credits or changes something (the generation tools, `chat`, `review_image`, `embed`, `extract_media`, `jev_decide`, `upload_asset`, `delete_asset`, `write_lyrics`); checking progress, the model list, voices, assets and the balance never asks.
+     Then restart Codex. Codex asks you to approve each call that spends credits or changes something (the generation tools, `chat`, `review_image`, `embed`, `extract_media`, `jev_decide`, `upload_asset`, `delete_asset`, `clone_voice`, `delete_voice`, `write_lyrics`); checking progress, the model list, voices, assets and the balance never asks.
 3. **Ask in plain words**, e.g. *"make a 5-second 16:9 video of a kitten slowly raising its head in morning light"* or *"plan a 20-second product video for this repo and render it shot by shot"*.
 
 No Node.js yet? Install the plugin anyway and ask for a video: the skill has the agent check for Node.js and, with your OK, install the official LTS for you (`winget` on Windows, Apple's installer on macOS).
@@ -57,7 +57,8 @@ Differences from the local server: the hosted one cannot read files on your mach
 | `generate_video` | Text-to-video, image-to-video, first + last frame, reference images / videos / audio (Seedance), talking avatars and lip sync (image or video + `audio_url`), motion transfer (image + driving video), upscaling and subtitle removal. |
 | `get_task` | Wait for / check on any image, video or audio task that came back as still running. |
 | `text_to_speech` | Speech from MiniMax, ElevenLabs (`eleven-tts-v3`, `v4`, flash, turbo, multilingual), Fish and Kling voices; returns the audio URL (ElevenLabs can also be saved to a local file). |
-| `list_voices` | Search 12,000+ MiniMax, ElevenLabs and Fish voices by language, gender or keyword. Free. |
+| `list_voices` | Search 12,000+ MiniMax, ElevenLabs and Fish voices by language, gender or keyword, the Kling voices for `kling-tts`, or your own clones (`mine: true`). Free. |
+| `clone_voice` · `delete_voice` | Clone a voice from an audio sample — MiniMax ($1.41), ElevenLabs (free, kept 24 hours) or Fish (first 20 free) — and delete clones you no longer need. |
 | `generate_audio` | Music with `suno-v5` (from a description or your own lyrics), sound effects, a soundtrack for a video, multi-speaker dialogue, dubbing into another language, and voice isolation. |
 | `write_lyrics` | Draft lyrics, a title and style tags for `suno-v5`. Free. |
 | `embed` | Embedding vectors (`text-embedding-3-small` / `-large`). |
