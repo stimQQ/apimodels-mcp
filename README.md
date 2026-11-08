@@ -25,7 +25,7 @@ Coding agents are good at planning — scripts, shot lists, prompts, editing wit
      codex plugin add apimodels@apimodels
      ```
      Only have the Codex desktop app and no `codex` command? Use `npx -y @openai/codex` in place of `codex` — it runs the official CLI on the fly and shares the app's config.
-     Then restart Codex. Codex asks you to approve each call that spends credits (`generate_video`, `generate_image`, `text_to_speech`, `chat`, `review_image`); checking progress, the model list and the balance never asks.
+     Then restart Codex. Codex asks you to approve each call that spends credits or changes something (the generation tools, `chat`, `review_image`, `embed`, `extract_media`, `jev_decide`, `upload_asset`, `delete_asset`, `write_lyrics`); checking progress, the model list, voices, assets and the balance never asks.
 3. **Ask in plain words**, e.g. *"make a 5-second 16:9 video of a kitten slowly raising its head in morning light"* or *"plan a 20-second product video for this repo and render it shot by shot"*.
 
 No Node.js yet? Install the plugin anyway and ask for a video: the skill has the agent check for Node.js and, with your OK, install the official LTS for you (`winget` on Windows, Apple's installer on macOS).
@@ -50,14 +50,24 @@ Differences from the local server: the hosted one cannot read files on your mach
 | Tool | What it does |
 |------|--------------|
 | `get_balance` | Your apimodels balance in USD — the agent checks it before a batch. |
-| `list_models` | List available model ids (chat / image / video / audio). |
+| `list_models` | Every model id, grouped by endpoint, with the tool that calls it. |
 | `chat` | Chat / text completion with any LLM (`gpt-6.1-sol`, `claude-opus-5-5`, `gemini-3-pro-preview`, …). |
-| `generate_image` | Text-to-image or image edit; returns the image URL(s) plus a downscaled preview the model can look at. With `doubao-seedream-5-0-flash` it can also keep a transparent background (`background: "transparent"`) or split one image into a base plus up to 16 transparent layers with names and positions (`layer_decomposition: true`, billed per output image). |
+| `generate_image` | Text-to-image and edits, with up to 16 reference images (`image_urls`), masks and markup images, exact `size`, `n`, `quality` and `output_format` — including animated GIF (`frame_count`, `frame_duration_ms`) and SVG on `gpt-image-2.6-flare` / `-sunburst`. Returns the URL(s) plus a preview the model can look at. With `doubao-seedream-5-0-flash` it can keep a transparent background or split an image into named transparent layers. |
 | `review_image` | A vision model critiques an image against your brief and proposes a revised prompt. |
-| `generate_video` | Text-to-video (optional reference image); returns the video URL(s), or a task id if it is not done within `wait_seconds`. |
-| `get_task` | Wait for / check on a task that `generate_image`, `generate_video` or `text_to_speech` handed back as still running. |
+| `generate_video` | Text-to-video, image-to-video, first + last frame, reference images / videos / audio (Seedance), talking avatars and lip sync (image or video + `audio_url`), motion transfer (image + driving video), upscaling and subtitle removal. |
+| `get_task` | Wait for / check on any image, video or audio task that came back as still running. |
+| `text_to_speech` | Speech from MiniMax, ElevenLabs (`eleven-tts-v3`, `v4`, flash, turbo, multilingual), Fish and Kling voices; returns the audio URL (ElevenLabs can also be saved to a local file). |
+| `list_voices` | Search 12,000+ MiniMax, ElevenLabs and Fish voices by language, gender or keyword. Free. |
+| `generate_audio` | Music with `suno-v5` (from a description or your own lyrics), sound effects, a soundtrack for a video, multi-speaker dialogue, dubbing into another language, and voice isolation. |
+| `write_lyrics` | Draft lyrics, a title and style tags for `suno-v5`. Free. |
+| `embed` | Embedding vectors (`text-embedding-3-small` / `-large`). |
+| `extract_media` | Direct video / image / audio links, captions and subtitles from YouTube, TikTok, Instagram, X, Bilibili, Douyin, Xiaohongshu and 1000+ other sites; whole profiles and playlists page by page. |
+| `jev_decide` | Jev (TypeSafe System One): typed questions about a state, answered with calibrated probabilities. |
+| `upload_asset` | Register an image, video or audio file in your asset library and get an `asset://` reference to reuse a person or product across video tasks ($0.01). |
+| `list_assets` · `get_asset` · `delete_asset` | Browse, check and delete library assets. |
 | `get_upload_url` | Hosted server only: a 15-minute link to `curl -T` a local file to; returns its public URL. |
-| `text_to_speech` | Text-to-speech (MiniMax voices); returns the audio URL. ElevenLabs TTS is not exposed here — it streams raw bytes from `POST /v1/tts/stream` rather than returning a URL. |
+
+Not exposed: the realtime voice model (`grok-voice-3.0`, a WebSocket session) — MCP tool calls cannot carry a live audio stream.
 
 ### Long generations do not get lost
 
@@ -77,14 +87,15 @@ Ask for an image and let the assistant iterate until it is right — "make a 16:
 
 The assistant picks `aspect_ratio` and `resolution` itself from what you ask for, so "make it 16:9" in plain words is enough.
 
-### Local images just work
+### Local files just work
 
-`image_url` on `generate_image` and `generate_video` takes any of these:
+Every input that takes a file — `image_url`, `image_urls`, `video_url`, `audio_url`, reference lists, `source` on `upload_asset` — takes any of these (images and audio up to 10 MB, video up to 100 MB):
 
 - a public `https://…` URL — passed through untouched
 - **a local file path** — `/Users/me/photo.png`, `./ref.jpg`, `~/Pictures/x.webp`
 - **a URL on your own machine** — `http://127.0.0.1:8000/photo.png`, `http://localhost:3000/…`
 - a `data:image/png;base64,…` URI
+- an `asset://…` reference from `upload_asset` — passed through untouched
 
 The last three are uploaded for you first, and the resulting public URL is what gets
 generated from. This has to happen here rather than server-side: the file exists only on
@@ -152,7 +163,7 @@ env = { APIMODELS_API_KEY = "sk_your_key_here" }
 
 Two things to know in Codex:
 
-- **Approvals.** Codex asks you to approve any tool call that is not marked read-only. Since 0.4.3, `list_models` and `get_task` are marked read-only, so waiting on a video no longer prompts on every check; the tools that bill your account (`generate_video`, `generate_image`, `text_to_speech`, `chat`, `review_image`) still ask once per call. To skip those prompts as well, add `default_tools_approval_mode = "approve"` under `[mcp_servers.apimodels]`.
+- **Approvals.** Codex asks you to approve any tool call that is not marked read-only. Since 0.4.3, `list_models` and `get_task` are marked read-only, so waiting on a video no longer prompts on every check (0.8.0 adds `list_voices`, `list_assets` and `get_asset`); the tools that bill your account or change your asset library still ask once per call. To skip those prompts as well, add `default_tools_approval_mode = "approve"` under `[mcp_servers.apimodels]`.
 - **Name the tool.** Codex loads MCP tools on demand rather than listing them all up front, so say which one you want — e.g. *"use apimodels generate_video to make a 5-second 16:9 clip of …"*. A bare "make me a video" may not make it look.
 
 ### Cherry Studio

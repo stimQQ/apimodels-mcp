@@ -2,18 +2,18 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.stimQQ/apimodels-mcp",
   "title": "apimodels",
-  "description": "Image, video, chat and speech models with one account — local (npx) or hosted with OAuth sign-in.",
+  "description": "Chat, image, video, speech, music and media models with one account — local (npx) or hosted.",
   "repository": {
     "url": "https://github.com/stimQQ/apimodels-mcp",
     "source": "github"
   },
   "websiteUrl": "https://apimodels.app",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "apimodels-mcp",
-      "version": "0.7.0",
+      "version": "0.8.0",
       "transport": {
         "type": "stdio"
       },
