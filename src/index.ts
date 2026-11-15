@@ -459,7 +459,7 @@ function transcriptText(t: TranscriptInfo): string {
     head,
     ...(t.transcriptUrl ? [`transcript_url: ${t.transcriptUrl}\n(full result as JSON, kept 30 days: task, duration, text — plus text_with_speakers, words[] with start / end / speaker and diarization[] when the job ran with timestamps: true)`] : []),
     ...(t.silent ? ['NOTE silent: no speech was detected in this audio, so the text is empty.'] : []),
-    ...(t.truncated ? ['NOTE truncated: the result was truncated, so this text may not cover the whole file.'] : []),
+    ...(t.truncated ? ['NOTE truncated: the output hit the length cap for this audio, which usually means the text started repeating. Review it by hand or discard it and run the file again.'] : []),
     '',
     t.text.trim() ? t.text : '(no text)',
   ].join('\n')
