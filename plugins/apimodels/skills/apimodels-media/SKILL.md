@@ -1,6 +1,6 @@
 ---
 name: apimodels-media
-description: Create videos, images and voice-over with the apimodels MCP tools (generate_video, generate_image, text_to_speech, get_task, get_balance). Use whenever the user wants to generate, animate or edit an image or a video, needs AI visuals or narration for a project, or wants a multi-shot video planned from a brief, script or storyboard and rendered (ads, product shots, social clips, explainers). Models include Seedance, Veo, Kling, MiniMax Hailuo, Wan, Grok Imagine, GPT Image, Nano Banana, Seedream, ElevenLabs and MiniMax speech.
+description: Create videos, images and voice-over, and transcribe recordings, with the apimodels MCP tools (generate_video, generate_image, text_to_speech, transcribe_audio, get_task, get_balance). Use whenever the user wants to generate, animate or edit an image or a video, needs AI visuals or narration for a project, wants an audio or video file transcribed (with timestamps and speakers, or translated), or wants a multi-shot video planned from a brief, script or storyboard and rendered (ads, product shots, social clips, explainers). Models include Seedance, Veo, Kling, MiniMax Hailuo, Wan, Grok Imagine, GPT Image, Nano Banana, Seedream, ElevenLabs and MiniMax speech.
 ---
 
 # Making media with apimodels
@@ -16,6 +16,7 @@ You plan, apimodels renders. Do the thinking yourself — brief, script, shot li
 | `generate_image` | Text to image; edit an image (pass `image_url`); transparent background / layer split on `doubao-seedream-5-0-flash` | yes |
 | `generate_video` | Text to video; image to video (`image_url` = first frame) | yes |
 | `text_to_speech` | Narration / voice-over | yes |
+| `transcribe_audio` | Speech to text: the text of an audio file or a video's audio track; `timestamps: true` for word times and speakers, or `target_language` to translate (not both) | yes, $0.0025 per audio minute |
 | `get_task` | Finish a task that came back STILL RUNNING | no |
 | `review_image` | A vision model checks an image against your brief | yes, small |
 | `chat` | Ask another LLM on apimodels | yes |
@@ -58,7 +59,7 @@ The tools come from a small local server that runs on Node.js. If none of them a
 - `seedance-2.5`, `seedance-2.0` — higher quality, slower.
 - `veo-3.1-fast-fhd` — Google Veo 3.1 Fast at 1080p, the lowest-priced flat-rate option.
 - `gemini-omni-video-lite` — short clips, fast.
-- `kling-v2-6`, `kling-v3-omni` — Kling.
+- `kling-v2-6`, `kling-v3-omni`, `kling-4.0` — Kling. `kling-4.0-flash` — Kling 4.0's lighter tier: 720p only, 3–20 s, with sound, $0.094 per second, same fields as `kling-4.0`.
 - `minimax-h3` — MiniMax Hailuo H3, takes several reference images; `minimax-h3-lite` — up to 768p at a lower price.
 - `wan-3.0-video`, `grok-imagine-video-1.5`, `ltx-2.3`.
 
@@ -68,6 +69,8 @@ The tools come from a small local server that runs on Node.js. If none of them a
 - `doubao-seedream-5-0-flash` — transparent backgrounds and layer splitting.
 
 **Speech** (`text_to_speech`): default `minimax-speech-02-turbo`; also `minimax-speech-2.8-hd`, `eleven-tts-v3`, `fish-s2.1-pro`.
+
+**Transcription** (`transcribe_audio`): `nemotron-3.5-transcribe`, up to 60 minutes and 200 MB per file, whole-file only (not realtime). The tool returns the text; the `transcript_url` JSON has the word timestamps and speakers when you asked for them. Local audio above 10 MB (video above 100 MB) cannot be uploaded for you — ask for a public URL.
 
 Match the aspect ratio to where the result will be used: 16:9 for YouTube and landscape screens, 9:16 for TikTok / Reels / Shorts / Douyin, 1:1 for feeds.
 

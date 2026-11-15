@@ -1,6 +1,6 @@
 # apimodels-mcp
 
-MCP server for [apimodels.app](https://apimodels.app) — call **image, video, LLM chat and text-to-speech** models with one API key, from Claude Desktop, Cursor, or any MCP client.
+MCP server for [apimodels.app](https://apimodels.app) — call **image, video, LLM chat, text-to-speech and speech-to-text** models with one API key, from Claude Desktop, Cursor, or any MCP client.
 
 One key unlocks GPT-6.1, Claude, Gemini, GLM, DeepSeek, Qwen, Seedance, Veo, Kling, gpt-image-2, Gemini Image, MiniMax speech and more — billed in USD, you only pay for successful generations.
 
@@ -25,7 +25,7 @@ Coding agents are good at planning — scripts, shot lists, prompts, editing wit
      codex plugin add apimodels@apimodels
      ```
      Only have the Codex desktop app and no `codex` command? Use `npx -y @openai/codex` in place of `codex` — it runs the official CLI on the fly and shares the app's config.
-     Then restart Codex. Codex asks you to approve each call that spends credits or changes something (the generation tools, `chat`, `review_image`, `embed`, `extract_media`, `jev_decide`, `upload_asset`, `delete_asset`, `clone_voice`, `delete_voice`, `write_lyrics`); checking progress, the model list, voices, assets and the balance never asks.
+     Then restart Codex. Codex asks you to approve each call that spends credits or changes something (the generation tools, `transcribe_audio`, `chat`, `review_image`, `embed`, `extract_media`, `jev_decide`, `upload_asset`, `delete_asset`, `clone_voice`, `delete_voice`, `write_lyrics`); checking progress, the model list, voices, assets and the balance never asks.
 3. **Ask in plain words**, e.g. *"make a 5-second 16:9 video of a kitten slowly raising its head in morning light"* or *"plan a 20-second product video for this repo and render it shot by shot"*.
 
 No Node.js yet? Install the plugin anyway and ask for a video: the skill has the agent check for Node.js and, with your OK, install the official LTS for you (`winget` on Windows, Apple's installer on macOS).
@@ -55,11 +55,12 @@ Differences from the local server: the hosted one cannot read files on your mach
 | `generate_image` | Text-to-image and edits, with up to 16 reference images (`image_urls`), masks and markup images, exact `size`, `n`, `quality` and `output_format` — including animated GIF (`frame_count`, `frame_duration_ms`) and SVG on `gpt-image-2.6-flare` / `-sunburst`. Returns the URL(s) plus a preview the model can look at. With `doubao-seedream-5-0-flash` it can keep a transparent background or split an image into named transparent layers. |
 | `review_image` | A vision model critiques an image against your brief and proposes a revised prompt. |
 | `generate_video` | Text-to-video, image-to-video, first + last frame, reference images / videos / audio (Seedance), talking avatars and lip sync (image or video + `audio_url`), motion transfer (image + driving video), upscaling and subtitle removal. |
-| `get_task` | Wait for / check on any image, video or audio task that came back as still running. |
+| `get_task` | Wait for / check on any image, video, audio or transcription task that came back as still running. |
 | `text_to_speech` | Speech from MiniMax, ElevenLabs (`eleven-tts-v3`, `v4`, flash, turbo, multilingual), Fish and Kling voices; returns the audio URL (ElevenLabs can also be saved to a local file). |
 | `list_voices` | Search 12,000+ MiniMax, ElevenLabs and Fish voices by language, gender or keyword, the Kling voices for `kling-tts`, or your own clones (`mine: true`). Free. |
 | `clone_voice` · `delete_voice` | Clone a voice from an audio sample — MiniMax ($1.41), ElevenLabs (free, kept 24 hours) or Fish (first 20 free) — and delete clones you no longer need. |
 | `generate_audio` | Music with `suno-v5` (from a description or your own lyrics), sound effects, a soundtrack for a video, multi-speaker dialogue, dubbing into another language, and voice isolation. |
+| `transcribe_audio` | Speech to text with `nemotron-3.5-transcribe`: the full text of an audio file or a video's audio track, plus a `transcript_url` to the complete JSON. Optional word-level timestamps with speaker labels (`timestamps`), or translation (`target_language`). $0.0025 per audio minute. |
 | `write_lyrics` | Draft lyrics, a title and style tags for `suno-v5`. Free. |
 | `embed` | Embedding vectors (`text-embedding-3-small` / `-large`). |
 | `extract_media` | Direct video / image / audio links, captions and subtitles from YouTube, TikTok, Instagram, X, Bilibili, Douyin, Xiaohongshu and 1000+ other sites; whole profiles and playlists page by page. |
@@ -87,6 +88,19 @@ Ask for an image and let the assistant iterate until it is right — "make a 16:
 2. `review_image` works everywhere, including clients that show tool-result images to you but not to the model (Cherry Studio is one). It sends the image and your brief to a vision model and returns what matches, what is wrong (garbled text, composition, aspect ratio, artifacts) and a revised prompt. One review costs well under $0.01 on the default `gpt-5.6-luna`.
 
 The assistant picks `aspect_ratio` and `resolution` itself from what you ask for, so "make it 16:9" in plain words is enough.
+
+### Speech to text
+
+`transcribe_audio` turns a recording into text — "transcribe ~/Downloads/interview.m4a and list the action items":
+
+- The answer is the text itself, with the audio duration and a `transcript_url`: the complete result as JSON, kept 30 days.
+- `timestamps: true` adds word-level start / end times and speaker labels (up to 8 speakers) to that JSON: `words[]`, `diarization[]` and `text_with_speakers`.
+- `target_language` translates the speech instead (32 language codes; only translation to or from English is guaranteed). It cannot be combined with `timestamps: true` — the tool refuses that pair before sending anything.
+- $0.0025 per audio minute ($0.15 per hour), billed by the second. Timestamps, speaker labels and translation cost nothing extra; failed jobs are not billed.
+- Up to 60 minutes and 200 MB per file: mp3, wav, m4a, aac, flac, ogg, opus, webm, or mp4 / mov with an audio track. Whole-file, offline transcription — not realtime.
+- A local file is uploaded first, and that upload takes audio up to 10 MB and video up to 100 MB. For a larger recording, put it at a public URL and pass the URL.
+
+A long recording that is still being processed comes back as a task id; `get_task` then returns the same text.
 
 ### Local files just work
 
@@ -185,8 +199,8 @@ Everything the tools call is documented on apimodels.app:
 
 - [API documentation](https://apimodels.app/docs) · [pricing](https://apimodels.app/pricing) · [full model catalog](https://apimodels.app/models)
 - Image: [GPT Image 2.5 API](https://apimodels.app/docs/gpt-image-2-5) ([model page](https://apimodels.app/models/gpt-image-2.5-flare)), [GPT Image 2 API](https://apimodels.app/docs/gpt-image-2), [Nano Banana 2.1 API](https://apimodels.app/docs/nano-banana-2-1) ([model page](https://apimodels.app/models/nano-banana-2-1)), [all image models](https://apimodels.app/docs/image)
-- Video: [Seedance 2.5 API](https://apimodels.app/docs/seedance-2-5), [Google Veo API](https://apimodels.app/docs/google-veo), [MiniMax H3 API](https://apimodels.app/docs/minimax-h3), [FlashVSR video upscaling](https://apimodels.app/docs/flashvsr)
-- Chat and speech: [LLM API (GPT, Claude, Gemini, DeepSeek, GLM, Qwen)](https://apimodels.app/docs/llm), [Claude Sonnet 5.5](https://apimodels.app/models/claude-sonnet-5-5), [audio and text-to-speech](https://apimodels.app/docs/audio)
+- Video: [Seedance 2.5 API](https://apimodels.app/docs/seedance-2-5), [Kling 4.0 and Kling 4.0 Flash API](https://apimodels.app/docs/kling-4-0) (`kling-4.0-flash`: 720p, 3–20 s, $0.094 per second, same fields as `kling-4.0`), [Google Veo API](https://apimodels.app/docs/google-veo), [MiniMax H3 API](https://apimodels.app/docs/minimax-h3), [FlashVSR video upscaling](https://apimodels.app/docs/flashvsr)
+- Chat and speech: [LLM API (GPT, Claude, Gemini, DeepSeek, GLM, Qwen)](https://apimodels.app/docs/llm), [Claude Sonnet 5.5](https://apimodels.app/models/claude-sonnet-5-5), [audio and text-to-speech](https://apimodels.app/docs/audio), [Nemotron 3.5 Transcribe (speech to text)](https://apimodels.app/docs/nemotron-3-5-transcribe)
 - Other ways in: [Claude Code setup](https://apimodels.app/docs/claude-code), [chat clients](https://apimodels.app/docs/clients), [Agent Skills](https://apimodels.app/docs/skills), [free calculators and tools](https://apimodels.app/tools)
 - Prompt libraries with example outputs: [GPT Image 2.5 prompts](https://apimodels.app/gpt-image-2-5-prompts), [GPT Image 2 prompts](https://apimodels.app/gpt-image-2-prompts), [Seedance 2.5 prompts](https://apimodels.app/seedance-2-5-prompts), [MiniMax H3 prompts](https://apimodels.app/minimax-h3-prompts)
 
@@ -197,7 +211,7 @@ Everything the tools call is documented on apimodels.app:
 | `APIMODELS_API_KEY` | — | Your `sk_…` key. Optional when you have run `apimodels-mcp login`; if both exist, this one wins. |
 | `APIMODELS_CREDENTIALS_FILE` | `~/.apimodels/credentials.json` | Where `apimodels-mcp login` saves the key and where the server looks for it. |
 | `APIMODELS_BASE_URL` | `https://api.apimodels.app/v1` | API base URL. |
-| `APIMODELS_WAIT_SECONDS` | `50` | Default `wait_seconds` for `generate_image`, `generate_video`, `text_to_speech` and `get_task`: how long a call waits before handing back a task id. Max 900. |
+| `APIMODELS_WAIT_SECONDS` | `50` | Default `wait_seconds` for `generate_image`, `generate_video`, `text_to_speech`, `generate_audio`, `transcribe_audio` and `get_task`: how long a call waits before handing back a task id. Max 900. |
 | `APIMODELS_TIMEOUT_MS` | — | Deprecated (0.2.x): the same wait in milliseconds. Still honoured if set. |
 
 ## Local development
@@ -205,8 +219,14 @@ Everything the tools call is documented on apimodels.app:
 ```bash
 pnpm install
 pnpm build
+pnpm test                                     # offline self-test: mocked API, no network, no cost
 APIMODELS_API_KEY=sk_... node dist/index.js   # runs over stdio
 ```
+
+## Changelog
+
+- **0.9.0** — `transcribe_audio`: speech to text with `nemotron-3.5-transcribe` (word-level timestamps, speaker labels, translation); `get_task` prints the text of a transcription task. `kling-4.0-flash` listed for `generate_video`.
+- **0.8.0** — every `/v1` endpoint as a tool (music, sound effects, dubbing, embeddings, media extraction, Jev), the asset library, voice cloning.
 
 ## License
 

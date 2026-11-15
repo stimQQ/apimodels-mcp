@@ -24,6 +24,8 @@ const ok = (name, cond, detail = '') => { console.log(`  ${cond ? 'ok  ' : 'FAIL
 const calls = []
 let assetGroups = []
 let syncImageAnswer = false // simulate an API without the async flag: WxH size → OpenAI synchronous answer
+// What GET /audio/generations?task_id=… answers for a speech-to-text task (shape verified in production, 2026-11-15).
+let transcriptResult = null
 const jsonRes = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
 globalThis.fetch = async (input, init = {}) => {
   const url = String(input)
@@ -43,6 +45,10 @@ globalThis.fetch = async (input, init = {}) => {
   if (method === 'POST' && /^\/(images|video|audio)\/generations$/.test(path)) return jsonRes({ code: 200, data: { taskId: 'task_1' } })
   if (method === 'GET' && /\/generations\?task_id=/.test(path)) {
     const kind = path.split('/')[1]
+    if (transcriptResult) {
+      const url = 'https://r2.test/transcripts/task_1.json'
+      return jsonRes({ code: 200, data: { state: 'completed', modelType: 'SPEECH_TO_TEXT', resultUrls: [url], resultJson: JSON.stringify({ ...transcriptResult, resultUrls: [url], transcript_url: url }) } })
+    }
     return jsonRes({ code: 200, data: { state: 'completed', resultUrls: [`https://r2.test/${kind}/out.bin`], modelType: kind === 'images' ? 'TEXT_TO_IMAGE' : kind === 'video' ? 'TEXT_TO_VIDEO' : 'TEXT_TO_SPEECH' } })
   }
   if (path === '/files') return jsonRes({ code: 200, data: { publicUrl: `https://r2.test/uploads/${files.name}` } })
@@ -91,8 +97,8 @@ async function call(name, args, apiPath) {
 
 console.log('\n— tool list —')
 const tools = (await client.listTools()).tools.map((t) => t.name).sort()
-const expected = ['chat', 'clone_voice', 'delete_asset', 'delete_voice', 'embed', 'extract_media', 'generate_audio', 'generate_image', 'generate_video', 'get_asset', 'get_balance', 'get_task', 'jev_decide', 'list_assets', 'list_models', 'list_voices', 'review_image', 'text_to_speech', 'upload_asset', 'write_lyrics']
-ok(`20 local tools (get_upload_url is hosted-only)`, JSON.stringify(tools) === JSON.stringify(expected), JSON.stringify(tools))
+const expected = ['chat', 'clone_voice', 'delete_asset', 'delete_voice', 'embed', 'extract_media', 'generate_audio', 'generate_image', 'generate_video', 'get_asset', 'get_balance', 'get_task', 'jev_decide', 'list_assets', 'list_models', 'list_voices', 'review_image', 'text_to_speech', 'transcribe_audio', 'upload_asset', 'write_lyrics']
+ok(`21 local tools (get_upload_url is hosted-only)`, JSON.stringify(tools) === JSON.stringify(expected), JSON.stringify(tools))
 const annotations = Object.fromEntries((await client.listTools()).tools.map((t) => [t.name, t.annotations || {}]))
 ok('read-only: list_voices, list_assets, get_asset (no approval prompt in Codex)', ['list_voices', 'list_assets', 'get_asset'].every((n) => annotations[n].readOnlyHint === true))
 ok('delete_asset / delete_voice are marked destructive', ['delete_asset', 'delete_voice'].every((n) => annotations[n].destructiveHint === true && annotations[n].readOnlyHint === false))
@@ -180,6 +186,43 @@ r = await call('generate_audio', { model: 'eleven-dialogue', inputs: [{ text: 'H
 ok('dialogue: inputs array', r.req?.body.inputs?.length === 2, JSON.stringify(r.req?.body))
 r = await call('write_lyrics', { prompt: 'summer' }, '/audio/lyrics')
 ok('write_lyrics → /audio/lyrics, title / tags / lyric in the answer', r.req?.body.prompt === 'summer' && /TITLE: Road/.test(r.text) && /la la/.test(r.text), r.text)
+
+console.log('\n— transcribe_audio —')
+ok('transcribe_audio is a billable tool (same annotations as the generation tools)', ['transcribe_audio', 'generate_audio'].every((n) => annotations[n].readOnlyHint === false && annotations[n].destructiveHint === false && annotations[n].idempotentHint === false && annotations[n].openWorldHint === true), JSON.stringify(annotations.transcribe_audio))
+transcriptResult = { task: 'transcribe', text: 'Hello there. General Kenobi.', duration: 47 }
+r = await call('transcribe_audio', { audio_url: 'https://cdn.test/talk.mp3', timestamps: true }, '/audio/generations')
+b = r.req?.body ?? {}
+ok('request body: model / audio_url / timestamps, nothing else', JSON.stringify(b) === JSON.stringify({ model: 'nemotron-3.5-transcribe', audio_url: 'https://cdn.test/talk.mp3', timestamps: true }), JSON.stringify(b))
+ok('public URL is passed through, not uploaded', !r.calls.some((c) => c.url.endsWith('/files')))
+ok('answer has the full text, the duration and transcript_url', !r.isError && /Hello there\. General Kenobi\./.test(r.text) && /47 s/.test(r.text) && /transcript_url: https:\/\/r2\.test\/transcripts\/task_1\.json/.test(r.text) && /^TRANSCRIPT/.test(r.text), r.text)
+ok('no silent / truncated notice when the result has neither', !/NOTE/.test(r.text), r.text)
+transcriptResult = { task: 'translate', text: 'Bonjour.', duration: 125 }
+r = await call('transcribe_audio', { audio_url: localMp3, target_language: 'fr' }, '/audio/generations')
+b = r.req?.body ?? {}
+const txUp = r.calls.filter((c) => c.url.endsWith('/files'))
+ok('local file is uploaded first (audio/mpeg), then sent as audio_url', txUp.length === 1 && txUp[0].files.type === 'audio/mpeg' && r.calls.indexOf(txUp[0]) < r.calls.indexOf(r.req) && b.audio_url === 'https://r2.test/uploads/voice.mp3', JSON.stringify(r.calls.map((c) => c.method + ' ' + c.url)))
+ok('target_language sent under that name, timestamps left out', b.target_language === 'fr' && !('timestamps' in b) && b.model === 'nemotron-3.5-transcribe', JSON.stringify(b))
+ok('translation is labelled, duration shown in minutes', /^TRANSLATION/.test(r.text) && /2 min 5 s/.test(r.text) && /Bonjour\./.test(r.text), r.text)
+r = await call('transcribe_audio', { audio_url: localMp3, timestamps: true, target_language: 'fr' })
+ok('timestamps + target_language refused before any upload or API call', r.isError && /cannot be used together/.test(r.text) && r.calls.length === 0, r.text + ' / calls ' + r.calls.length)
+r = await call('transcribe_audio', { audio_url: 'https://cdn.test/talk.mp3', timestamps: false, target_language: 'ja' }, '/audio/generations')
+ok('timestamps: false + target_language is allowed', !r.isError && r.req?.body.timestamps === false && r.req?.body.target_language === 'ja', r.text)
+r = await call('transcribe_audio', { audio_url: 'https://cdn.test/talk.mp3', target_language: 'xx' })
+ok('target_language outside the 32 codes is rejected by the schema, no API call', r.isError && r.calls.length === 0, r.text)
+transcriptResult = { task: 'transcribe', text: '', duration: 12, silent: true, truncated: true }
+r = await call('transcribe_audio', { audio_url: 'https://cdn.test/quiet.wav' }, '/audio/generations')
+ok('silent / truncated are called out', !r.isError && /NOTE silent/.test(r.text) && /NOTE truncated/.test(r.text), r.text)
+transcriptResult = { task: 'transcribe', text: 'Picked up later.', duration: 3600 }
+r = await call('get_task', { task_id: 'task_1' })
+ok('get_task on a transcription task prints the text and transcript_url too', !r.isError && /Picked up later\./.test(r.text) && /transcript_url: https:\/\/r2\.test\/transcripts\/task_1\.json/.test(r.text) && /60 min 0 s/.test(r.text), r.text)
+transcriptResult = null
+r = await call('get_task', { task_id: 'task_1' })
+ok('get_task on other tasks is unchanged: just the URL', r.text === 'https://r2.test/video/out.bin', r.text)
+r = await call('generate_audio', { model: 'eleven-sfx-v3', prompt: 'rain' }, '/audio/generations')
+ok('generate_audio output is unchanged: just the URL', r.text === 'https://r2.test/audio/out.bin', r.text)
+r = await call('generate_video', { model: 'kling-4.0-flash', prompt: 'p', image_url: 'https://cdn.test/a.png', resolution: '720p', duration: 5 }, '/video/generations')
+const k4 = (await call('generate_video', { model: 'kling-4.0', prompt: 'p', image_url: 'https://cdn.test/a.png', resolution: '720p', duration: 5 }, '/video/generations')).req?.body
+ok('kling-4.0-flash sends exactly the fields kling-4.0 does', JSON.stringify({ ...r.req?.body, model: 'kling-4.0' }) === JSON.stringify(k4), JSON.stringify(r.req?.body))
 
 console.log('\n— voices: kling list, mine, clone, delete —')
 r = await call('list_voices', { provider: 'kling', language: 'en' })

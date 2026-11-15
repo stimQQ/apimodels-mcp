@@ -2,7 +2,7 @@
 /**
  * apimodels-mcp — Model Context Protocol server for apimodels.app
  *
- * Exposes chat, image, video, speech, music / sound, embeddings, media extraction, the Jev decision model
+ * Exposes chat, image, video, speech, transcription, music / sound, embeddings, media extraction, the Jev decision model
  * and the asset library as MCP tools, so any MCP client (Claude Desktop, Cursor, …) can call every
  * apimodels model with a single API key (0.8.0: every endpoint in /v1/models except the realtime websocket).
  *
@@ -57,7 +57,7 @@ const POLL_INTERVAL_MS = 3_000
 // them to paste the key into the chat.
 const NO_KEY_MSG = `No apimodels API key found. Run \`npx -y apimodels-mcp login\` (you can run it for the user): it opens apimodels.app in their browser, they click Authorize, and the key is saved on this machine — nothing to copy or paste, no restart needed. Do not ask the user to paste a key into the chat. Keys: ${KEYS_URL}`
 
-const VERSION = '0.8.0'
+const VERSION = '0.9.0'
 
 /**
  * Hosted mode (`apimodels-mcp serve`, see http.ts): every HTTP request runs inside
@@ -287,8 +287,15 @@ async function submitAndWait(kind: Kind, body: Record<string, unknown>, waitS: n
 /** One entry of resultJson.layers — returned by Seedream 5.0 Flash layer splitting. Index 0 is the flattened base. */
 type LayerInfo = { name?: string; role?: string; z_index?: number; description?: string; bounding_box?: { absolute?: number[]; normalized?: number[] } }
 
+/**
+ * A finished speech-to-text task (0.9.0, nemotron-3.5-transcribe). Its product is text, carried in the task's
+ * resultJson as { task: 'transcribe' | 'translate', text, duration, transcript_url, silent?, truncated? };
+ * resultUrls[0] is the same transcript_url (the full result JSON), not a media file.
+ */
+type TranscriptInfo = { task: 'transcribe' | 'translate'; text: string; duration?: number; transcriptUrl?: string; silent?: boolean; truncated?: boolean }
+
 type TaskState =
-  | { state: 'completed'; urls: string[]; kind: Kind; layers?: LayerInfo[] }
+  | { state: 'completed'; urls: string[]; kind: Kind; layers?: LayerInfo[]; transcript?: TranscriptInfo }
   | { state: 'failed'; message: string; retryable: boolean; kind: Kind }
   | { state: 'running'; elapsedS: number; kind: Kind }
 
@@ -319,15 +326,29 @@ async function pollTask(kind: Kind, taskId: string, waitS: number): Promise<Task
     const k = kindOf(d.modelType, kind)
     if (d.state === 'completed') {
       const urls: string[] = d.resultUrls || []
-      if (!urls.length) throw new Error(`Task ${taskId} completed but returned no result URLs`)
       // Layer splitting returns one URL per layer and the per-layer metadata in
-      // resultJson.layers; the task endpoint serialises resultJson as a string.
+      // resultJson.layers; a transcription returns its text in resultJson.text.
+      // The task endpoint serialises resultJson as a string.
       let layers: LayerInfo[] | undefined
+      let transcript: TranscriptInfo | undefined
       try {
         const rj = typeof d.resultJson === 'string' ? JSON.parse(d.resultJson) : d.resultJson
         if (Array.isArray(rj?.layers)) layers = rj.layers
-      } catch { /* no layer metadata */ }
-      return { state: 'completed', urls, kind: k, ...(layers ? { layers } : {}) }
+        if ((rj?.task === 'transcribe' || rj?.task === 'translate') && typeof rj.text === 'string') {
+          const url = typeof rj.transcript_url === 'string' ? rj.transcript_url : urls[0]
+          transcript = {
+            task: rj.task,
+            text: rj.text,
+            ...(Number.isFinite(Number(rj.duration)) && rj.duration != null ? { duration: Number(rj.duration) } : {}),
+            ...(url ? { transcriptUrl: url } : {}),
+            ...(rj.silent === true ? { silent: true } : {}),
+            ...(rj.truncated === true ? { truncated: true } : {}),
+          }
+        }
+      } catch { /* no layer / transcript metadata */ }
+      // A transcript is a complete result on its own (its text); every other task must deliver a file.
+      if (!urls.length && !transcript) throw new Error(`Task ${taskId} completed but returned no result URLs`)
+      return { state: 'completed', urls, kind: k, ...(layers ? { layers } : {}), ...(transcript ? { transcript } : {}) }
     }
     if (d.state === 'failed') {
       return { state: 'failed', message: d.failMsg || d.failCode || 'unknown error', retryable: Boolean(d.retryable), kind: k }
@@ -419,10 +440,36 @@ function layerText(urls: string[], layers: LayerInfo[]): string {
   ].join('\n')
 }
 
-/** Result URLs, plus previews for image tasks when asked. Shared by generate_image and get_task. */
+/** 83 → "1 min 23 s". */
+function durationLabel(seconds: number): string {
+  const s = Math.round(seconds)
+  return s < 60 ? `${s} s` : `${Math.floor(s / 60)} min ${s % 60} s`
+}
+
+/**
+ * Speech-to-text result: the text itself is the answer, so it is printed in full, after a short header
+ * (task, audio length, where the full JSON is) and any silent / truncated notice.
+ */
+function transcriptText(t: TranscriptInfo): string {
+  const head = [
+    t.task === 'translate' ? 'TRANSLATION' : 'TRANSCRIPT',
+    ...(t.duration != null ? [`audio duration ${durationLabel(t.duration)} (${t.duration} s)`] : []),
+  ].join(' — ')
+  return [
+    head,
+    ...(t.transcriptUrl ? [`transcript_url: ${t.transcriptUrl}\n(full result as JSON, kept 30 days: task, duration, text — plus text_with_speakers, words[] with start / end / speaker and diarization[] when the job ran with timestamps: true)`] : []),
+    ...(t.silent ? ['NOTE silent: no speech was detected in this audio, so the text is empty.'] : []),
+    ...(t.truncated ? ['NOTE truncated: the result was truncated, so this text may not cover the whole file.'] : []),
+    '',
+    t.text.trim() ? t.text : '(no text)',
+  ].join('\n')
+}
+
+/** Result URLs (or the transcript text), plus previews for image tasks when asked. Shared by the generation tools and get_task. */
 async function taskResult(taskId: string, s: TaskState, returnImage: boolean) {
   if (s.state === 'running') return text(runningText(taskId, s))
   if (s.state === 'failed') return { ...text(failedText(taskId, s)), isError: true }
+  if (s.transcript) return text(transcriptText(s.transcript))
   const previews = returnImage && s.kind === 'images' ? await Promise.all(s.urls.slice(0, 2).map(imagePreview)) : []
   return {
     content: [
@@ -446,6 +493,12 @@ const waitSecondsParam = (what: string) =>
  * approval prompts. list_models and get_task only read, so they are read-only and run without a
  * prompt. Everything else submits billable work and stays approval-gated on purpose.
  */
+/** target_language values of nemotron-3.5-transcribe: English plus the 31 languages it translates to and from English. */
+const TRANSCRIBE_TARGET_LANGUAGES = [
+  'en', 'zh', 'ja', 'ko', 'fr', 'de', 'es', 'pt', 'it', 'ru', 'nl', 'pl', 'cs', 'sk', 'hi', 'bg',
+  'hr', 'da', 'et', 'fi', 'hu', 'lv', 'lt', 'ro', 'sl', 'sv', 'th', 'uk', 'ar', 'el', 'he', 'mt',
+] as const
+
 const READ_ONLY = { readOnlyHint: true } as const
 const BILLABLE = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true } as const
 
@@ -469,7 +522,7 @@ export function buildServer(): McpServer {
 
   server.tool(
     'list_models',
-    'List the model ids available on apimodels.app, grouped by type with the endpoint each one uses. Every id listed is callable. Tool per endpoint: /v1/chat/completions → chat; /v1/images/generations → generate_image; /v1/video/generations → generate_video; /v1/audio/generations → text_to_speech (minimax-speech-*, fish-*, kling-tts) or generate_audio (music, sound effects, dialogue, dubbing, isolation); /v1/tts/stream (eleven-tts-*) → text_to_speech; /v1/embeddings → embed; /v1/media/extract → extract_media; /v1/systemone (jev) → jev_decide. The realtime voice model (wss) is not usable through MCP.',
+    'List the model ids available on apimodels.app, grouped by type with the endpoint each one uses. Every id listed is callable. Tool per endpoint: /v1/chat/completions → chat; /v1/images/generations → generate_image; /v1/video/generations → generate_video; /v1/audio/generations → text_to_speech (minimax-speech-*, fish-*, kling-tts), generate_audio (music, sound effects, dialogue, dubbing, isolation) or transcribe_audio (speech to text: nemotron-3.5-transcribe); /v1/tts/stream (eleven-tts-*) → text_to_speech; /v1/embeddings → embed; /v1/media/extract → extract_media; /v1/systemone (jev) → jev_decide. The realtime voice model (wss) is not usable through MCP.',
     {},
     { title: 'List models', ...READ_ONLY },
     async () => {
@@ -619,7 +672,7 @@ export function buildServer(): McpServer {
     'Generate or process a video: text-to-video, image-to-video, first + last frame, multi-reference, lip sync and talking avatars (image or video + audio), motion transfer (image + driving video), upscaling and subtitle removal (video in). Submits the job and waits up to wait_seconds: returns the video URL(s) (valid 30 days) if it finishes in time, otherwise a task id — then call get_task with that id; never resubmit a running task. Video takes a median 2.5 minutes and 9 in 10 finish within 8 minutes, so expect one or two get_task calls. Video is the most expensive modality here — the default model is billed per second ($0.071/s at 480p, $0.153/s at 720p, so a 5-second 480p clip is about $0.36); pass model:"veo-3.1-fast-fhd" for a flat $0.088 per 8-second 1080p clip. Each model reads only the inputs it supports — check its page on apimodels.app/docs.',
     {
       prompt: z.string().optional().describe('Text description of the video. Required by generation models; optional for processing models (video-upscale, flashvsr, subtitle-erase, lip sync with audio).'),
-      model: z.string().default('seedance-2.0-fast').describe('Video model id. Generation: seedance-2.0-fast, seedance-2.0, seedance-2.0-mini, seedance-2.5, wan-3.0-video, minimax-h3, minimax-h3-lite (from $0.01/s, up to 768p), ltx-2.3, grok-imagine-video-1.5, veo-3.1-fast-fhd ($0.088 flat), veo-3.1, kling-v2-6, kling-4.0, vidu-q4. First + last frame (image_url + last_frame_url): v3.1-fast-start-end, seedance, kling. Talking avatar from a photo (image_url + audio_url): omnihuman-2.0, ai-lipsync. Talking avatar from a video (video_url + audio_url): digital-human. Motion transfer (image_url + driving video_url): dreamactor-v2, wan-animate, kling-motion-control, kling-v3-motion-control. Video in: video-upscale and flashvsr (upscale; target in resolution), subtitle-erase. Kling lip sync is two calls: kling-identify-face (video_url) returns a session and face ids, then kling-lip-sync-video (audio_url) or kling-lip-sync-tts (text / voiceId) with sessionId and faceId in extra. Call list_models for the full list.'),
+      model: z.string().default('seedance-2.0-fast').describe('Video model id. Generation: seedance-2.0-fast, seedance-2.0, seedance-2.0-mini, seedance-2.5, wan-3.0-video, minimax-h3, minimax-h3-lite (from $0.01/s, up to 768p), ltx-2.3, grok-imagine-video-1.5, veo-3.1-fast-fhd ($0.088 flat), veo-3.1, kling-v2-6, kling-4.0, kling-4.0-flash (720p only, 3–20 s, $0.094/s, same fields as kling-4.0), vidu-q4. First + last frame (image_url + last_frame_url): v3.1-fast-start-end, seedance, kling. Talking avatar from a photo (image_url + audio_url): omnihuman-2.0, ai-lipsync. Talking avatar from a video (video_url + audio_url): digital-human. Motion transfer (image_url + driving video_url): dreamactor-v2, wan-animate, kling-motion-control, kling-v3-motion-control. Video in: video-upscale and flashvsr (upscale; target in resolution), subtitle-erase. Kling lip sync is two calls: kling-identify-face (video_url) returns a session and face ids, then kling-lip-sync-video (audio_url) or kling-lip-sync-tts (text / voiceId) with sessionId and faceId in extra. Call list_models for the full list.'),
       aspect_ratio: z.string().optional().describe('Optional aspect ratio, e.g. 16:9, 9:16, 1:1.'),
       resolution: z.string().optional().describe('Optional resolution, e.g. 480p, 720p, 1080p.'),
       duration: z.union([z.number(), z.string()]).optional().describe('Optional duration in seconds, e.g. 5 or 10.'),
@@ -694,7 +747,7 @@ export function buildServer(): McpServer {
 
   server.tool(
     'get_task',
-    'Check on, or wait for, an image / video / audio task that generate_image, generate_video, text_to_speech or generate_audio handed back as "still running". Returns the result URL(s) once it has finished (with an image preview for image tasks), a failure message if it failed, or "still running" again — in which case call get_task once more. Waits up to wait_seconds before answering, so one call usually suffices for a task that is nearly done. Task ids also appear at https://apimodels.app/console/records.',
+    'Check on, or wait for, an image / video / audio / transcription task that generate_image, generate_video, text_to_speech, generate_audio or transcribe_audio handed back as "still running". Returns the result URL(s) once it has finished (with an image preview for image tasks; for a transcription task the full text, audio duration and transcript_url), a failure message if it failed, or "still running" again — in which case call get_task once more. Waits up to wait_seconds before answering, so one call usually suffices for a task that is nearly done. Task ids also appear at https://apimodels.app/console/records.',
     {
       task_id: z.string().describe('The task id from the "STILL RUNNING" message (or from the apimodels console).'),
       wait_seconds: waitSecondsParam('task'),
@@ -887,7 +940,7 @@ export function buildServer(): McpServer {
 
   server.tool(
     'generate_audio',
-    'Music, sound effects and audio processing on /v1/audio/generations: suno-v5 (songs with vocals or instrumental, from a description or your own lyrics), eleven-sfx-v3 and kling-sound-effects (sound effects from text), kling-video-to-audio (soundtrack for a video), eleven-dialogue (multi-speaker dialogue), eleven-dubbing (translate the speech in an audio / video file), eleven-isolator (strip background noise and music, keep the voice). For plain text-to-speech use text_to_speech. Returns the audio URL(s), valid 30 days; long jobs (music, dubbing) hand back a task id for get_task.',
+    'Music, sound effects and audio processing on /v1/audio/generations: suno-v5 (songs with vocals or instrumental, from a description or your own lyrics), eleven-sfx-v3 and kling-sound-effects (sound effects from text), kling-video-to-audio (soundtrack for a video), eleven-dialogue (multi-speaker dialogue), eleven-dubbing (translate the speech in an audio / video file), eleven-isolator (strip background noise and music, keep the voice). For plain text-to-speech use text_to_speech; to turn speech into text use transcribe_audio. Returns the audio URL(s), valid 30 days; long jobs (music, dubbing) hand back a task id for get_task.',
     {
       model: z.string().describe('suno-v5, eleven-sfx-v3, kling-sound-effects, kling-video-to-audio, eleven-dialogue, eleven-dubbing or eleven-isolator. Call list_models for the full audio list.'),
       prompt: z.string().optional().describe('suno-v5: what the song should be about and sound like (the model writes the lyrics); with your own lyrics it is used as the style when tags is empty. Sound effects: describe the sound, e.g. "glass shattering on a tile floor".'),
@@ -929,6 +982,41 @@ export function buildServer(): McpServer {
         if (audio_url) body.audio_url = await resolveMediaInput(audio_url)
         if (video_url) body.video_url = await resolveMediaInput(video_url)
         if (source_url) body.source_url = await resolveMediaInput(source_url)
+        const { taskId, state } = await submitAndWait('audio', body, wait_seconds)
+        return await taskResult(taskId, state, false)
+      } catch (e) { return fail(e) }
+    },
+  )
+
+  /**
+   * Speech to text (0.9.0) — its own tool rather than a generate_audio model because the answer is text, not an
+   * audio URL. POST /v1/audio/generations { model, audio_url, timestamps?, target_language? } → async task; the
+   * finished task carries the text in resultJson (see TranscriptInfo / pollTask). Local uploads go through /v1/files,
+   * which caps audio at 10 MB and video at 100 MB — below the model's own 200 MB, hence the wording in the description.
+   */
+  server.tool(
+    'transcribe_audio',
+    `Speech to text: transcribe an audio file, or the audio track of a video, with nemotron-3.5-transcribe. Returns the full text, the audio duration and a transcript_url (the complete result as JSON, kept 30 days). With timestamps: true that JSON also has word-level start / end times and speaker labels (up to 8 speakers). With target_language the speech is translated instead of transcribed. $0.0025 per audio minute ($0.15 per hour), billed by the second; timestamps, speaker labels and translation cost nothing extra; failed jobs, and files whose length cannot be read, are not billed. Limits: up to 60 minutes and 200 MB per file; mp3, wav, m4a, aac, flac, ogg, opus, webm, or mp4 / mov with an audio track. Offline, whole-file transcription — no realtime / streaming. ${runtime.remote ? 'This hosted server cannot read local files: pass a public URL, or upload the file first with get_upload_url (audio files up to 10 MB, video files up to 50 MB).' : 'A local file is uploaded for you first, and that upload is limited to 10 MB for audio files and 100 MB for video files — for anything larger, put the file at a public URL and pass the URL.'} A short clip finishes in seconds (a 47-second recording took about 8 s); a long recording may come back as a task id — call get_task with it, do not resubmit.`,
+    {
+      audio_url: z.string().describe('The audio (or video with an audio track) to transcribe: a public https:// URL that downloads directly, a LOCAL FILE PATH, a localhost URL or a data: URI — local sources are uploaded for you (audio up to 10 MB, video up to 100 MB).'),
+      timestamps: z.boolean().optional().describe('true: the JSON at transcript_url also carries word-level start / end times and speaker labels (up to 8 speakers). Default false. Cannot be combined with target_language.'),
+      target_language: z.enum(TRANSCRIBE_TARGET_LANGUAGES).optional().describe('Translate the speech into this language instead of transcribing it. Only translation to or from English is guaranteed. Cannot be combined with timestamps: true.'),
+      model: z.string().default('nemotron-3.5-transcribe').describe('Speech-to-text model id. nemotron-3.5-transcribe is the only one for now.'),
+      wait_seconds: waitSecondsParam('transcript'),
+    },
+    { title: 'Transcribe audio', ...BILLABLE },
+    async ({ audio_url, timestamps, target_language, model, wait_seconds }) => {
+      try {
+        // The API answers 400 to this combination; refuse it here so nothing is uploaded or submitted first.
+        if (timestamps && target_language) {
+          throw new Error('timestamps: true and target_language cannot be used together. Run two jobs if you need both: one with timestamps: true (word times and speakers in the original language) and one with target_language (the translation).')
+        }
+        const body: Record<string, unknown> = {
+          model,
+          audio_url: await resolveMediaInput(audio_url),
+          ...(timestamps != null ? { timestamps } : {}),
+          ...(target_language ? { target_language } : {}),
+        }
         const { taskId, state } = await submitAndWait('audio', body, wait_seconds)
         return await taskResult(taskId, state, false)
       } catch (e) { return fail(e) }

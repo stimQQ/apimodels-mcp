@@ -8,12 +8,12 @@
     "source": "github"
   },
   "websiteUrl": "https://apimodels.app",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "apimodels-mcp",
-      "version": "0.8.0",
+      "version": "0.9.0",
       "transport": {
         "type": "stdio"
       },
@@ -33,7 +33,7 @@
         },
         {
           "name": "APIMODELS_WAIT_SECONDS",
-          "description": "Default wait_seconds for generate_image / generate_video / text_to_speech / get_task before they hand back a task id. Default 50 (Codex aborts tool calls at 60 s).",
+          "description": "Default wait_seconds for generate_image / generate_video / text_to_speech / transcribe_audio / get_task before they hand back a task id. Default 50 (Codex aborts tool calls at 60 s).",
           "isRequired": false,
           "format": "string"
         },

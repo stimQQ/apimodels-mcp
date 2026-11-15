@@ -1,6 +1,6 @@
 # Installing apimodels-mcp (guide for AI agents)
 
-apimodels-mcp gives an MCP client image generation and editing, video generation, text-to-speech and LLM chat through one [apimodels.app](https://apimodels.app) account. There are two ways to install it. Prefer the hosted server: nothing to install and no key to handle.
+apimodels-mcp gives an MCP client image generation and editing, video generation, text-to-speech, speech-to-text (transcription) and LLM chat through one [apimodels.app](https://apimodels.app) account. There are two ways to install it. Prefer the hosted server: nothing to install and no key to handle.
 
 Never ask the user to paste an API key into the chat, and never write a key into a file inside a project or repository.
 
@@ -31,7 +31,7 @@ Cline in VS Code: add this to `cline_mcp_settings.json` (MCP Servers → Configu
 
 Then run the server's OAuth authorization. A browser window opens on apimodels.app; the user signs in (or signs up) and clicks **Authorize**. The token is a dedicated API key named `MCP · <app> · <date>`, which the user can delete in the console to disconnect.
 
-The hosted server cannot read files on the user's machine. To use a local image as a reference, call `get_upload_url`, upload the file with `curl -T <file> "<upload url>"`, and pass the returned public URL as `image_url`.
+The hosted server cannot read files on the user's machine. To use a local image as a reference, call `get_upload_url`, upload the file with `curl -T <file> "<upload url>"`, and pass the returned public URL as `image_url` (or as `audio_url` for `transcribe_audio`).
 
 ## Option B: local server (Node.js 18 or later)
 
@@ -60,7 +60,7 @@ The hosted server cannot read files on the user's machine. To use a local image 
 
    If the user prefers an environment variable, add `"env": { "APIMODELS_API_KEY": "sk_..." }` with a key they enter themselves.
 
-The local server also accepts local file paths and `http://localhost` URLs as `image_url` and uploads them first.
+The local server also accepts local file paths and `http://localhost` URLs as `image_url` / `audio_url` and uploads them first (images and audio up to 10 MB, video up to 100 MB).
 
 ## Check that it works
 
@@ -70,4 +70,4 @@ The local server also accepts local file paths and `http://localhost` URLs as `i
 
 ## Spending
 
-`generate_image`, `generate_video`, `text_to_speech`, `chat` and `review_image` spend account credit; failed generations are not charged. Confirm with the user before large batches or long videos. A generation that is still running returns a task id: call `get_task` with it instead of generating again, so the user is not billed twice.
+`generate_image`, `generate_video`, `text_to_speech`, `generate_audio`, `transcribe_audio` ($0.0025 per audio minute), `chat` and `review_image` spend account credit; failed generations are not charged. Confirm with the user before large batches or long videos. A generation that is still running returns a task id: call `get_task` with it instead of generating again, so the user is not billed twice.

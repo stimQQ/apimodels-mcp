@@ -43,7 +43,7 @@ APIMODELS_API_KEY=$APIMODELS_API_KEY node scripts/generate.mjs \
   --type video --prompt "a timelapse of a city at night" --model seedance-2.0-fast --resolution 720p --duration 5
 ```
 
-- Common video models: `seedance-2.0-fast`, `seedance-2.0`, `veo-3.1-fast-fhd` ($0.088 flat per 8-second 1080p clip), `veo-3.1`, `grok-video-3`, `kling-v2-6`.
+- Common video models: `seedance-2.0-fast`, `seedance-2.0`, `veo-3.1-fast-fhd` ($0.088 flat per 8-second 1080p clip), `veo-3.1`, `grok-video-3`, `kling-v2-6`, `kling-4.0`, `kling-4.0-flash` (720p only, 3–20 s, $0.094 per second).
 - Use the **dotted** public names. The bare internal forms (`seedance-2-fast`, `seedance-2`) appear in `GET /api/v1/models` but the generation endpoint rejects them with "Invalid model".
 - Optional: `--aspect_ratio`, `--resolution` (480p/720p/1080p), `--duration` (seconds), `--image_url` (first-frame / reference image for image-to-video).
 
