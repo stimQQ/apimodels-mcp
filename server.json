@@ -4,7 +4,7 @@
   "title": "apimodels",
   "description": "Chat, image, video, speech, music and media models with one account — local (npx) or hosted.",
   "repository": {
-    "url": "https://github.com/stimQQ/apimodels-mcp",
+    "url": "https://github.com/apimodels/apimodels-mcp",
     "source": "github"
   },
   "websiteUrl": "https://apimodels.app",

@@ -4,7 +4,7 @@
   "description": "Generate video, images and voice-over from Codex with apimodels.app: Seedance, Veo, Kling, MiniMax Hailuo, Wan, GPT Image, Nano Banana, Seedream, ElevenLabs and more, on one API key.",
   "author": { "name": "apimodels", "url": "https://apimodels.app" },
   "homepage": "https://apimodels.app/docs/codex",
-  "repository": "https://github.com/stimQQ/apimodels-mcp",
+  "repository": "https://github.com/apimodels/apimodels-mcp",
   "license": "MIT",
   "keywords": ["video", "image", "text-to-speech", "seedance", "veo", "kling", "gpt-image", "mcp"],
   "skills": "./skills/",

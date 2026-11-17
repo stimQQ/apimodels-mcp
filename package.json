@@ -53,10 +53,10 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/stimQQ/apimodels-mcp.git"
+    "url": "git+https://github.com/apimodels/apimodels-mcp.git"
   },
   "bugs": {
-    "url": "https://github.com/stimQQ/apimodels-mcp/issues"
+    "url": "https://github.com/apimodels/apimodels-mcp/issues"
   },
   "mcpName": "io.github.stimQQ/apimodels-mcp",
   "packageManager": "pnpm@10.23.0"

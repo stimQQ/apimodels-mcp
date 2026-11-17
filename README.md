@@ -16,12 +16,12 @@ Coding agents are good at planning — scripts, shot lists, prompts, editing wit
 2. **Install the plugin.**
    - Claude Code (2.1.275 or later):
      ```
-     /plugin install apimodels --marketplace stimQQ/apimodels-mcp
+     /plugin install apimodels --marketplace apimodels/apimodels-mcp
      ```
-     Older versions: `/plugin marketplace add stimQQ/apimodels-mcp`, then `/plugin install apimodels@apimodels`.
+     Older versions: `/plugin marketplace add apimodels/apimodels-mcp`, then `/plugin install apimodels@apimodels`.
    - Codex:
      ```bash
-     codex plugin marketplace add stimQQ/apimodels-mcp
+     codex plugin marketplace add apimodels/apimodels-mcp
      codex plugin add apimodels@apimodels
      ```
      Only have the Codex desktop app and no `codex` command? Use `npx -y @openai/codex` in place of `codex` — it runs the official CLI on the fly and shares the app's config.

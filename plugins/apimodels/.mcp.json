@@ -2,7 +2,7 @@
   "mcpServers": {
     "apimodels": {
       "command": "npx",
-      "args": ["-y", "apimodels-mcp@latest"]
+      "args": ["-y", "apimodels-mcp@0.9.0"]
     }
   }
 }
