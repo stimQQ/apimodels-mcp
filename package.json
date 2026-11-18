@@ -1,6 +1,6 @@
 {
   "name": "apimodels-mcp",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "description": "MCP server for apimodels.app — call chat, image, video, speech, transcription, music, embedding and media models, plus the asset library, with one API key, from Claude Desktop, Cursor and any MCP client.",
   "type": "module",
   "license": "MIT",
@@ -30,7 +30,9 @@
     "prepare": "tsc",
     "start": "node dist/index.js",
     "dev": "tsc --watch",
-    "test": "node scripts/selftest.mjs"
+    "test": "node scripts/selftest.mjs && node scripts/install-test.mjs",
+    "test:install": "node scripts/install-test.mjs",
+    "test:mutations": "node scripts/install-mutations.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.0",

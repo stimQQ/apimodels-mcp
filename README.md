@@ -4,6 +4,38 @@ MCP server for [apimodels.app](https://apimodels.app) — call **image, video, L
 
 One key unlocks GPT-6.1, Claude, Gemini, GLM, DeepSeek, Qwen, Seedance, Veo, Kling, gpt-image-2, Gemini Image, MiniMax speech and more — billed in USD, you only pay for successful generations.
 
+## Install: one command for every client on your machine
+
+```bash
+npx -y apimodels-mcp install
+```
+
+Needs [Node.js](https://nodejs.org/en/download) 18 or later. It looks for the MCP clients installed on this computer, lists them, and asks Y/n for each before adding apimodels to that client's own config. It adds the **hosted server** `https://api.apimodels.app/mcp`, so there is no key to copy: each client asks you to sign in to apimodels.app and click **Authorize** the first time it uses the server.
+
+| Client | What the installer changes |
+|--------|----------------------------|
+| Claude Code | runs `claude mcp add --transport http --scope user apimodels https://api.apimodels.app/mcp` |
+| Codex (CLI, IDE extension, desktop app) | runs `codex mcp add apimodels --url …`, then `codex mcp login apimodels`; without the `codex` command it adds `[mcp_servers.apimodels]` to `~/.codex/config.toml` |
+| Claude Desktop | `claude_desktop_config.json` → `mcpServers.apimodels` = the local server `npx -y apimodels-mcp` (its config file only takes local servers), then `apimodels-mcp login` once if no key is saved yet |
+| Cursor | `~/.cursor/mcp.json` → `mcpServers.apimodels` = `{ "url": … }` |
+| VS Code | user `mcp.json` → `servers.apimodels` = `{ "type": "http", "url": … }` |
+| Windsurf / Devin Desktop | `~/.config/devin/mcp_config.json` (Windows `%APPDATA%\devin\`) → `mcpServers.apimodels` = `{ "url": … }` |
+| Gemini CLI | `~/.gemini/settings.json` → `mcpServers.apimodels` = `{ "httpUrl": … }` |
+| OpenCode | `~/.config/opencode/opencode.json(c)` → `mcp.servers.apimodels` = `{ "type": "remote", "url": … }` |
+| WorkBuddy, ChatGPT, Claude.ai | nothing to edit: add `https://api.apimodels.app/mcp` as a custom connector in the app (WorkBuddy: 连接器 → 自定义连接器) |
+
+It never overwrites a config: it edits only the `apimodels` entry and keeps everything else in the file byte for byte, comments and formatting included. Before changing a file it writes a copy next to it, `<file>.apimodels-backup-<timestamp>`. An existing `apimodels` entry that differs is kept unless you confirm replacing it. Running it again changes nothing.
+
+```bash
+npx -y apimodels-mcp install --dry-run          # show the exact changes, write nothing
+npx -y apimodels-mcp install --yes              # every client found, no questions
+npx -y apimodels-mcp install --client cursor,vscode
+npx -y apimodels-mcp install --local            # local server everywhere: it can read files on this machine
+npx -y apimodels-mcp uninstall                  # remove apimodels again (also takes --yes / --dry-run / --client)
+```
+
+Other flags: `--replace` replaces a different existing entry without asking, `--no-login` skips the browser sign-in at the end. Client names for `--client`: `claude-code`, `codex`, `claude-desktop`, `cursor`, `vscode`, `windsurf`, `gemini`, `opencode`.
+
 ## Fastest setup: the Codex / Claude Code plugin
 
 Coding agents are good at planning — scripts, shot lists, prompts, editing with ffmpeg. The **apimodels plugin** gives them the part they cannot do: rendering the video, images and voice-over. It bundles this MCP server plus a skill that teaches the agent when to use it, how to pick a model, how to wait for long renders and when to ask before spending.
@@ -123,7 +155,7 @@ Uploads land in your account's R2 space and are auto-deleted after 30 days.
 ## Setup
 
 1. Run `npx -y apimodels-mcp login` and click **Authorize** in the browser — or create a key at <https://apimodels.app/console/api-keys> (it looks like `sk_…`) and put it in the server's environment as `APIMODELS_API_KEY`, as the examples below do.
-2. Add the server to your MCP client. `npx -y apimodels-mcp status` shows which key is in use and your balance.
+2. Add the server to your MCP client (`npx -y apimodels-mcp install --local` does this for every client it finds), or by hand as below. `npx -y apimodels-mcp status` shows which key is in use and your balance.
 
 ### Claude Desktop
 
@@ -219,11 +251,16 @@ Everything the tools call is documented on apimodels.app:
 ```bash
 pnpm install
 pnpm build
-pnpm test                                     # offline self-test: mocked API, no network, no cost
+pnpm test                                     # offline self-test (mocked API) + installer test (fake HOME), no network, no cost
+pnpm test:mutations                           # breaks the installer 17 ways; each break must turn the installer test red
 APIMODELS_API_KEY=sk_... node dist/index.js   # runs over stdio
 ```
 
+The installer test never touches your real home directory: every run gets a temporary HOME / APPDATA / XDG_CONFIG_HOME and a PATH with stand-in `claude` / `codex` commands.
+
 ## Changelog
+
+- **0.10.0** — `apimodels-mcp install` / `uninstall`: adds the server to Claude Code, Codex, Claude Desktop, Cursor, VS Code, Windsurf / Devin Desktop, Gemini CLI and OpenCode in one go — hosted server with OAuth where the client supports it, local server elsewhere; merges instead of overwriting, keeps comments, writes a backup first, `--dry-run` shows the exact changes.
 
 - **0.9.0** — `transcribe_audio`: speech to text with `nemotron-3.5-transcribe` (word-level timestamps, speaker labels, translation); `get_task` prints the text of a transcription task. `kling-4.0-flash` listed for `generate_video`.
 - **0.8.0** — every `/v1` endpoint as a tool (music, sound effects, dubbing, embeddings, media extraction, Jev), the asset library, voice cloning.

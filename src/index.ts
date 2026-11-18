@@ -57,7 +57,7 @@ const POLL_INTERVAL_MS = 3_000
 // them to paste the key into the chat.
 const NO_KEY_MSG = `No apimodels API key found. Run \`npx -y apimodels-mcp login\` (you can run it for the user): it opens apimodels.app in their browser, they click Authorize, and the key is saved on this machine — nothing to copy or paste, no restart needed. Do not ask the user to paste a key into the chat. Keys: ${KEYS_URL}`
 
-const VERSION = '0.9.0'
+const VERSION = '0.10.0'
 
 /**
  * Hosted mode (`apimodels-mcp serve`, see http.ts): every HTTP request runs inside
@@ -1209,7 +1209,7 @@ async function main() {
   console.error('[apimodels-mcp] ready (stdio). Base URL:', BASE_URL)
 }
 
-// `apimodels-mcp login | logout | status` — a terminal command, not the server.
+// `apimodels-mcp install | uninstall | login | logout | status` — terminal commands, not the server.
 // APIMODELS_MCP_NO_MAIN=1 imports the module without starting anything (scripts/selftest.mjs).
 const cmd = process.argv[2]
 if (process.env.APIMODELS_MCP_NO_MAIN === '1') {
@@ -1223,6 +1223,12 @@ if (process.env.APIMODELS_MCP_NO_MAIN === '1') {
   process.env.MCP_PUBLIC_URL ||= `http://localhost:${port}`
   import('./http.js').then(({ serve }) => serve({ buildServer, requestKey, apiBaseUrl: BASE_URL, uploadBytes, guessMime }, port)).catch((e) => {
     console.error('[apimodels-mcp] fatal:', e)
+    process.exit(1)
+  })
+} else if (cmd === 'install' || cmd === 'uninstall') {
+  // `apimodels-mcp install | uninstall` (0.10.0): add the server to every MCP client on this machine (install.ts)
+  import('./install.js').then(({ runInstaller }) => runInstaller(cmd, process.argv.slice(3), BASE_URL)).then((code) => process.exit(code), (e) => {
+    console.error(e instanceof Error ? e.message : e)
     process.exit(1)
   })
 } else if (cmd && CLI_COMMANDS.has(cmd)) {

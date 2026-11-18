@@ -50,6 +50,11 @@ function readFileKey(): string | null {
   }
 }
 
+/** A key saved by `login` (the file). Desktop apps only see the file, not APIMODELS_API_KEY. */
+export function hasSavedKey(): boolean {
+  return readFileKey() !== null
+}
+
 let cached: KeySource | null = null
 
 /** The key to use right now, or null. Env wins; the file is re-read until a key is found. */
@@ -204,7 +209,9 @@ export async function runCli(cmd: string, args: string[], baseUrl: string): Prom
       return 1
     }
   }
-  say('Usage: apimodels-mcp login [--no-browser | --paste | --stdin | --key sk_…] | logout | status')
+  say('Usage: apimodels-mcp install | uninstall | login [--no-browser | --paste | --stdin | --key sk_…] | logout | status')
+  say('  install         add apimodels to every MCP client on this machine (asks per client; --help for options)')
+  say('  uninstall       remove it again')
   say('  login           authorize in the browser (default); --paste prompts for a key; --stdin reads one; --key passes one')
   say('  (no argument)   run the MCP server on stdio')
   return cmd === 'help' || cmd === '--help' || cmd === '-h' ? 0 : 1
