@@ -81,25 +81,71 @@ interface Env {
   platform: Platform
   home: string
   appData: string // Windows %APPDATA%
+  localAppData: string // Windows %LOCALAPPDATA%
   xdgConfig: string // $XDG_CONFIG_HOME or ~/.config
+  xdgData: string // $XDG_DATA_HOME or ~/.local/share
+  systemAppDirs: string[] // /Applications, Program Files, /usr/share/applications …
   codexHome: string
   claudeJson: string
 }
 
 function makeEnv(): Env {
-  // APIMODELS_INSTALL_PLATFORM only exists so the tests can lay out Windows / Linux paths in a fake HOME.
+  // APIMODELS_INSTALL_PLATFORM and APIMODELS_INSTALL_SYSTEM_DIRS only exist so the tests can lay
+  // out Windows / Linux paths in a fake HOME and never look at this machine's real /Applications.
   const forced = process.env.APIMODELS_INSTALL_PLATFORM
   const platform: Platform = forced === 'win32' || forced === 'linux' || forced === 'darwin'
     ? forced : process.platform === 'win32' ? 'win32' : process.platform === 'darwin' ? 'darwin' : 'linux'
   const home = homedir()
+  const sys = process.env.APIMODELS_INSTALL_SYSTEM_DIRS
+  const systemAppDirs = sys !== undefined ? sys.split(delimiter).filter(Boolean)
+    : platform === 'darwin' ? ['/Applications']
+      : platform === 'win32' ? [process.env.ProgramFiles || 'C:\\Program Files', process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)']
+        : ['/usr/share/applications', '/usr/local/share/applications', '/var/lib/snapd/desktop/applications', '/var/lib/flatpak/exports/share/applications']
   return {
     platform,
     home,
     appData: process.env.APPDATA || join(home, 'AppData', 'Roaming'),
+    localAppData: process.env.LOCALAPPDATA || join(home, 'AppData', 'Local'),
     xdgConfig: process.env.XDG_CONFIG_HOME || join(home, '.config'),
+    xdgData: process.env.XDG_DATA_HOME || join(home, '.local', 'share'),
+    systemAppDirs,
     codexHome: process.env.CODEX_HOME || join(home, '.codex'),
     claudeJson: join(process.env.CLAUDE_CONFIG_DIR || home, '.claude.json'),
   }
+}
+
+// ─── is the client actually installed? ──────────────────────────────────────
+//
+// A folder alone is not enough (2026-11-18, real-machine dry run): skill installers create
+// ~/.codeium/windsurf/skills, ~/.config/opencode/skills, ~/.cursor/skills …, and uninstalling an
+// app leaves its profile folder behind (~/Library/Application Support/Code/User). A client counts
+// as installed only on a strong signal: its command on PATH, its app (macOS .app in /Applications
+// or ~/Applications, Windows .exe under %LOCALAPPDATA%[\Programs] or Program Files, Linux .desktop
+// entry), or the config FILE the installer would edit (or one only that client writes). A client
+// with nothing but a folder is listed as a leftover and skipped unless named with --client.
+
+interface Detection { strong: string | null; weak: string | null }
+type AppNames = Partial<Record<Platform, string[]>>
+
+function appRoots(env: Env): string[] {
+  if (env.platform === 'darwin') return [...env.systemAppDirs, join(env.home, 'Applications')]
+  if (env.platform === 'win32') return [env.localAppData, join(env.localAppData, 'Programs'), ...env.systemAppDirs]
+  return [join(env.xdgData, 'applications'), ...env.systemAppDirs]
+}
+
+const isFile = (p: string) => { try { return statSync(p).isFile() } catch { return false } }
+
+function detect(env: Env, s: { clis?: string[]; apps?: AppNames; files?: string[]; dirs?: string[] }): Detection {
+  for (const cmd of s.clis ?? []) if (which(cmd)) return { strong: `${cmd} on PATH`, weak: null }
+  for (const root of appRoots(env)) {
+    for (const rel of s.apps?.[env.platform] ?? []) {
+      const p = join(root, rel)
+      if (existsSync(p)) return { strong: tilde(env, p), weak: null }
+    }
+  }
+  for (const f of s.files ?? []) if (isFile(f)) return { strong: tilde(env, f), weak: null }
+  const dirs = (s.dirs ?? []).filter((d) => existsSync(d)).map((d) => tilde(env, d))
+  return { strong: null, weak: dirs.length ? dirs.join(', ') : null }
 }
 
 /** Per-OS application config folder (Electron's appData): Claude Desktop, VS Code. */
@@ -118,7 +164,7 @@ interface JsonClient {
   id: string
   name: string
   modes: Mode[] // first = default
-  detect(env: Env): boolean
+  detect(env: Env): Detection
   file(env: Env): string
   path: string[] // container of the servers map
   entry(mode: Mode): Entry
@@ -133,7 +179,7 @@ interface CliClient<K extends 'claude' | 'codex'> {
   id: string
   name: string
   modes: Mode[]
-  detect(env: Env): boolean
+  detect(env: Env): Detection
   signIn: string
 }
 type Client = JsonClient | CliClient<'claude'> | CliClient<'codex'>
@@ -144,17 +190,17 @@ const sameArgs = (a: unknown) => Array.isArray(a) && a.length === LOCAL.args.len
 const CLIENTS: Client[] = [
   {
     kind: 'claude', id: 'claude-code', name: 'Claude Code', modes: ['remote', 'local'],
-    detect: (env) => !!which('claude') || existsSync(env.claudeJson) || existsSync(join(env.home, '.claude')),
+    detect: (env) => detect(env, { clis: ['claude'], files: [env.claudeJson], dirs: [join(env.home, '.claude')] }),
     signIn: 'in Claude Code run /mcp, pick apimodels, Authenticate (or: claude mcp login apimodels)',
   },
   {
     kind: 'codex', id: 'codex', name: 'Codex', modes: ['remote', 'local'],
-    detect: (env) => !!which('codex') || existsSync(env.codexHome),
+    detect: (env) => detect(env, { clis: ['codex'], apps: { darwin: ['Codex.app'] }, files: [codexFile(env), join(env.codexHome, 'auth.json')], dirs: [env.codexHome] }),
     signIn: 'codex mcp login apimodels',
   },
   {
     kind: 'json', id: 'claude-desktop', name: 'Claude Desktop', modes: ['local'],
-    detect: (env) => existsSync(appConfigDir(env, 'Claude')),
+    detect: (env) => detect(env, { apps: { darwin: ['Claude.app'], win32: [join('AnthropicClaude', 'claude.exe')] }, files: [join(appConfigDir(env, 'Claude'), 'claude_desktop_config.json')], dirs: [appConfigDir(env, 'Claude')] }),
     file: (env) => join(appConfigDir(env, 'Claude'), 'claude_desktop_config.json'),
     path: ['mcpServers'],
     entry: () => ({ ...LOCAL, args: [...LOCAL.args] }),
@@ -163,7 +209,7 @@ const CLIENTS: Client[] = [
   },
   {
     kind: 'json', id: 'cursor', name: 'Cursor', modes: ['remote', 'local'],
-    detect: (env) => existsSync(join(env.home, '.cursor')),
+    detect: (env) => detect(env, { clis: ['cursor'], apps: { darwin: ['Cursor.app'], win32: [join('cursor', 'Cursor.exe')], linux: ['cursor.desktop'] }, files: [join(env.home, '.cursor', 'mcp.json')], dirs: [join(env.home, '.cursor')] }),
     file: (env) => join(env.home, '.cursor', 'mcp.json'),
     path: ['mcpServers'],
     entry: (mode) => (mode === 'remote' ? { url: REMOTE_URL } : { ...LOCAL, args: [...LOCAL.args] }),
@@ -172,7 +218,7 @@ const CLIENTS: Client[] = [
   },
   {
     kind: 'json', id: 'vscode', name: 'VS Code', modes: ['remote', 'local'],
-    detect: (env) => existsSync(join(appConfigDir(env, 'Code'), 'User')),
+    detect: (env) => detect(env, { clis: ['code'], apps: { darwin: ['Visual Studio Code.app'], win32: [join('Microsoft VS Code', 'Code.exe')], linux: ['code.desktop', 'code_code.desktop'] }, files: [join(appConfigDir(env, 'Code'), 'User', 'mcp.json')], dirs: [join(appConfigDir(env, 'Code'), 'User')] }),
     file: (env) => join(appConfigDir(env, 'Code'), 'User', 'mcp.json'),
     path: ['servers'],
     entry: (mode) => (mode === 'remote' ? { type: 'http', url: REMOTE_URL } : { type: 'stdio', ...LOCAL, args: [...LOCAL.args] }),
@@ -181,7 +227,7 @@ const CLIENTS: Client[] = [
   },
   {
     kind: 'json', id: 'windsurf', name: 'Windsurf / Devin Desktop', modes: ['remote', 'local'],
-    detect: (env) => existsSync(dirname(devinFile(env))) || existsSync(join(env.home, '.codeium', 'windsurf')),
+    detect: (env) => detect(env, { clis: ['windsurf', 'devin'], apps: { darwin: ['Windsurf.app', 'Devin.app'], win32: [join('Windsurf', 'Windsurf.exe'), join('Devin', 'Devin.exe')], linux: ['windsurf.desktop', 'devin.desktop'] }, files: [devinFile(env), join(env.home, '.codeium', 'windsurf', 'mcp_config.json')], dirs: [dirname(devinFile(env)), join(env.home, '.codeium', 'windsurf')] }),
     file: (env) => devinFile(env),
     path: ['mcpServers'],
     entry: (mode) => (mode === 'remote' ? { url: REMOTE_URL } : { ...LOCAL, args: [...LOCAL.args] }),
@@ -190,7 +236,7 @@ const CLIENTS: Client[] = [
   },
   {
     kind: 'json', id: 'gemini', name: 'Gemini CLI', modes: ['remote', 'local'],
-    detect: (env) => existsSync(join(env.home, '.gemini')) || !!which('gemini'),
+    detect: (env) => detect(env, { clis: ['gemini'], files: [join(env.home, '.gemini', 'settings.json')], dirs: [join(env.home, '.gemini')] }),
     file: (env) => join(env.home, '.gemini', 'settings.json'),
     path: ['mcpServers'],
     entry: (mode) => (mode === 'remote' ? { httpUrl: REMOTE_URL } : { ...LOCAL, args: [...LOCAL.args] }),
@@ -199,7 +245,7 @@ const CLIENTS: Client[] = [
   },
   {
     kind: 'json', id: 'opencode', name: 'OpenCode', modes: ['remote', 'local'],
-    detect: (env) => existsSync(join(env.xdgConfig, 'opencode')) || !!which('opencode'),
+    detect: (env) => detect(env, { clis: ['opencode'], apps: { darwin: ['OpenCode.app'], win32: [join('OpenCode', 'OpenCode.exe')], linux: ['opencode.desktop'] }, files: [join(env.xdgConfig, 'opencode', 'opencode.json'), join(env.xdgConfig, 'opencode', 'opencode.jsonc')], dirs: [join(env.xdgConfig, 'opencode')] }),
     file: (env) => {
       const dir = join(env.xdgConfig, 'opencode')
       return existsSync(join(dir, 'opencode.jsonc')) ? join(dir, 'opencode.jsonc') : join(dir, 'opencode.json')
@@ -336,7 +382,7 @@ type State =
 interface Target {
   client: Client
   mode: Mode
-  detected: boolean
+  detection: Detection // strong = installed; weak only = a leftover folder
   where: string // file path or "claude CLI"
   state: State
   cli: boolean // the official CLI is available (claude / codex)
@@ -391,15 +437,15 @@ function codexState(env: Env, mode: Mode): State {
 
 function targetFor(c: Client, env: Env, forceLocal: boolean): Target {
   const mode: Mode = forceLocal && c.modes.includes('local') ? 'local' : c.modes[0]
-  const detected = c.detect(env)
-  if (c.kind === 'json') return { client: c, mode, detected, where: c.file(env), state: jsonState(c, c.file(env), mode), cli: false }
+  const detection = c.detect(env)
+  if (c.kind === 'json') return { client: c, mode, detection, where: c.file(env), state: jsonState(c, c.file(env), mode), cli: false }
   if (c.kind === 'claude') {
     const cli = !!which('claude')
     const state = claudeState(env, mode)
-    return { client: c, mode, detected, where: cli ? `claude CLI (user scope, ${tilde(env, env.claudeJson)})` : env.claudeJson, state, cli }
+    return { client: c, mode, detection, where: cli ? `claude CLI (user scope, ${tilde(env, env.claudeJson)})` : env.claudeJson, state, cli }
   }
   const cli = !!which('codex')
-  return { client: c, mode, detected, where: cli ? `codex CLI (${tilde(env, codexFile(env))})` : codexFile(env), state: codexState(env, mode), cli }
+  return { client: c, mode, detection, where: cli ? `codex CLI (${tilde(env, codexFile(env))})` : codexFile(env), state: codexState(env, mode), cli }
 }
 
 // ─── the commands ───────────────────────────────────────────────────────────
@@ -461,8 +507,11 @@ export async function runInstaller(cmd: 'install' | 'uninstall', argv: string[],
   const uninstall = cmd === 'uninstall'
 
   const wanted = o.clients ? CLIENTS.filter((c) => o.clients!.includes(c.id)) : CLIENTS
-  const targets = wanted.map((c) => targetFor(c, env, o.local)).filter((t) => o.clients || t.detected)
-  const missing = o.clients ? [] : CLIENTS.filter((c) => !targets.some((t) => t.client === c))
+  const all = wanted.map((c) => targetFor(c, env, o.local))
+  // Named with --client: configure it whatever we detect. Otherwise only clients with a strong signal.
+  const targets = all.filter((t) => o.clients || t.detection.strong)
+  const leftovers = all.filter((t) => !targets.includes(t) && t.detection.weak)
+  const missing = all.filter((t) => !targets.includes(t) && !t.detection.weak).map((t) => t.client)
 
   say(uninstall ? 'apimodels-mcp uninstall' : `apimodels-mcp install — ${o.local ? 'local server (npx -y apimodels-mcp)' : `hosted server ${REMOTE_URL}`}`)
   if (o.dryRun) say('Dry run: nothing will be written.')
@@ -478,6 +527,12 @@ export async function runInstaller(cmd: 'install' | 'uninstall', argv: string[],
             : uninstall ? 'no apimodels entry' : `will add (${t.mode === 'remote' ? 'hosted, OAuth' : 'local, npx'})`
       say(`  ${t.client.name.padEnd(26)}${status.padEnd(34)}${tilde(env, t.where)}`)
     }
+  }
+  const found = targets.filter((t) => t.detection.strong)
+  if (found.length && !o.clients) say(`Detected by: ${found.map((t) => `${t.client.name} (${t.detection.strong})`).join(', ')}`)
+  if (leftovers.length) {
+    say('Not detected, only a leftover config folder (skipped; name it with --client to set it up anyway):')
+    for (const t of leftovers) say(`  ${t.client.name.padEnd(26)}${t.detection.weak}`)
   }
   if (missing.length) say(`Not found: ${missing.map((c) => c.name).join(', ')}`)
   say()

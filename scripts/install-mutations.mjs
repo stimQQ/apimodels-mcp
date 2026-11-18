@@ -109,6 +109,16 @@ const MUTATIONS = [
     edits: [['install.js', "xdgConfig: process.env.XDG_CONFIG_HOME || join(home, '.config'),", "xdgConfig: join(home, '.config'),"]],
   },
   {
+    id: 'dir-only-detection',
+    what: 'back to "the folder exists = the client is installed" (skills/ folders, leftover profiles count)',
+    edits: [['install.js', "return { strong: null, weak: dirs.length ? dirs.join(', ') : null };", "return { strong: dirs.length ? dirs.join(', ') : null, weak: null };"]],
+  },
+  {
+    id: 'leftovers-configured-under-yes',
+    what: '--yes also configures clients that only have a leftover folder',
+    edits: [['install.js', 'const targets = all.filter((t) => o.clients || t.detection.strong);', 'const targets = all.filter((t) => o.clients || t.detection.strong || t.detection.weak);']],
+  },
+  {
     id: 'opencode-guard-off',
     what: 'OpenCode: edit an older-layout config instead of refusing',
     edits: [['install.js', 'const g = c.guard?.(toValue(root));', 'const g = null;']],

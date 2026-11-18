@@ -113,14 +113,18 @@ function put(file, text) { mkdirSync(dirname(file), { recursive: true }); writeF
 const read = (f) => (existsSync(f) ? readFileSync(f, 'utf8') : null)
 
 /** Run the CLI in a fake home. Nothing from this process's environment leaks in. */
-function cli(home, args, { platform = 'darwin', input = '', shims = true, env = {} } = {}) {
+function cli(home, args, { platform = 'darwin', input = '', shims = true, extraPath = [], env = {} } = {}) {
   if (!home.startsWith(root + '/')) throw new Error('refusing to run outside the temp root')
   const e = {
     HOME: home,
     USERPROFILE: home,
     APPDATA: join(home, 'AppData', 'Roaming'),
     XDG_CONFIG_HOME: join(home, '.config'),
-    PATH: [...(shims ? [shimDir] : []), ...SYS_PATH].join(':'),
+    LOCALAPPDATA: join(home, 'AppData', 'Local'),
+    // /Applications, Program Files, /usr/share/applications → a folder inside the fake home, so the
+    // apps installed on THIS machine never count as detected.
+    APIMODELS_INSTALL_SYSTEM_DIRS: join(home, 'SystemApps'),
+    PATH: [...extraPath, ...(shims ? [shimDir] : []), ...SYS_PATH].join(':'),
     SHIM_LOG: join(home, 'shim.log'),
     APIMODELS_INSTALL_PLATFORM: platform,
     APIMODELS_SITE_URL: 'http://127.0.0.1:9', // a login attempt could never reach the real site
@@ -342,7 +346,8 @@ ok('unknown client → exit 2 with the list', r.code === 2 && r.out.includes('Kn
 section('Linux paths ($XDG_CONFIG_HOME)')
 const L = newHome('linux')
 const xdg = join(L, 'xdg')
-for (const d of ['Claude', 'Code/User', 'devin', 'opencode']) mkdirSync(join(xdg, d), { recursive: true })
+for (const d of ['code.desktop', 'windsurf.desktop', 'opencode.desktop']) put(join(L, '.local', 'share', 'applications', d), '[Desktop Entry]\n')
+put(join(xdg, 'Claude', 'claude_desktop_config.json'), '{}\n')
 r = cli(L, ['install', '--yes', '--no-login'], { platform: 'linux', env: { XDG_CONFIG_HOME: xdg } })
 ok('exit 0', r.code === 0, r.out)
 for (const f of ['Claude/claude_desktop_config.json', 'Code/User/mcp.json', 'devin/mcp_config.json', 'opencode/opencode.json']) ok(`written to $XDG_CONFIG_HOME/${f}`, (read(join(xdg, f)) ?? '').includes('apimodels'), r.out)
@@ -351,18 +356,51 @@ ok('nothing under ~/.config or ~/Library', !existsSync(join(L, '.config')) && !e
 section('Windows paths (%APPDATA%, %USERPROFILE%)')
 const W = newHome('windows')
 const appData = join(W, 'Roaming-custom')
-for (const d of ['Claude', 'Code/User', 'devin']) mkdirSync(join(appData, d), { recursive: true })
-mkdirSync(join(W, '.cursor'), { recursive: true })
+const localAppData = join(W, 'Local-custom')
+for (const exe of ['Programs/cursor/Cursor.exe', 'Programs/Windsurf/Windsurf.exe', 'Programs/OpenCode/OpenCode.exe']) put(join(localAppData, exe), 'MZ')
+put(join(W, 'ProgramFiles', 'Microsoft VS Code', 'Code.exe'), 'MZ')
 const BOM_DESKTOP = '\uFEFF{\r\n  "mcpServers": {}\r\n}\r\n' // Notepad on Windows saves a BOM
 put(join(appData, 'Claude', 'claude_desktop_config.json'), BOM_DESKTOP)
-mkdirSync(join(W, '.config', 'opencode'), { recursive: true })
-r = cli(W, ['install', '--yes', '--no-login'], { platform: 'win32', env: { APPDATA: appData, XDG_CONFIG_HOME: undefined } })
+r = cli(W, ['install', '--yes', '--no-login'], { platform: 'win32', env: { APPDATA: appData, LOCALAPPDATA: localAppData, APIMODELS_INSTALL_SYSTEM_DIRS: join(W, 'ProgramFiles'), XDG_CONFIG_HOME: undefined } })
 ok('exit 0', r.code === 0, r.out)
 for (const f of ['Claude/claude_desktop_config.json', 'Code/User/mcp.json', 'devin/mcp_config.json']) ok(`written to %APPDATA%\\${f}`, (read(join(appData, f)) ?? '').includes('apimodels'), r.out)
 ok('Cursor in %USERPROFILE%\\.cursor, OpenCode in %USERPROFILE%\\.config\\opencode', (read(join(W, '.cursor', 'mcp.json')) ?? '').includes(URL) && (read(join(W, '.config', 'opencode', 'opencode.json')) ?? '').includes(URL), r.out)
 ok('nothing under the default AppData\\Roaming', !existsSync(join(W, 'AppData')))
 const bomAfter = read(join(appData, 'Claude', 'claude_desktop_config.json'))
 ok('a BOM at the start of the file is kept, CRLF kept', bomAfter.startsWith('\uFEFF{\r\n') && jsonc(bomAfter.slice(1)).mcpServers.apimodels.command === 'npx' && !/[^\r]\n/.test(bomAfter), JSON.stringify(bomAfter))
+
+section('detection: a folder alone is not enough')
+const S = newHome('leftovers')
+// what skill installers create in many agents' folders, and what an uninstalled app leaves behind
+for (const d of ['.codeium/windsurf/skills', '.config/opencode/skills', '.cursor/skills', '.claude/skills', '.codex/skills', '.gemini/skills', '.config/devin', 'Library/Application Support/Code/User/History']) mkdirSync(join(S, d), { recursive: true })
+put(join(S, 'Library', 'Application Support', 'Code', 'User', 'settings.json'), '{ "editor.fontSize": 14 }\n')
+put(join(S, 'Library', 'Application Support', 'Claude', 'config.json'), '{}\n')
+put(join(S, '.codeium', 'windsurf', 'skills', 'x', 'SKILL.md'), '# x\n')
+const sl = snapshot(S)
+r = cli(S, ['install', '--yes', '--no-login'], { shims: false })
+ok('folders with only skills/ (or a leftover profile) → no client detected, exit 0', r.code === 0 && /No MCP clients found/.test(r.out), r.out)
+ok('--yes writes nothing for them', sameSnap(snapshot(S), sl), changedKeys(snapshot(S), sl))
+const leftoverBlock = r.out.split('Not detected, only a leftover config folder')[1] ?? ''
+ok('each one is listed as a leftover folder, with the folder', ['Windsurf / Devin Desktop', 'OpenCode', 'VS Code', 'Cursor', 'Claude Code', 'Codex', 'Gemini CLI', 'Claude Desktop'].every((n) => leftoverBlock.includes(n)) && leftoverBlock.includes('~/Library/Application Support/Code/User') && leftoverBlock.includes('~/.codeium/windsurf'), r.out)
+r = cli(S, ['install', '--yes', '--no-login', '--client', 'vscode'], { shims: false })
+const vsLeft = read(join(S, 'Library', 'Application Support', 'Code', 'User', 'mcp.json'))
+ok('--client vscode still configures the leftover profile', r.code === 0 && jsonc(vsLeft ?? '{}').servers?.apimodels?.url === URL, r.out)
+ok('…and touches nothing else there', read(join(S, 'Library', 'Application Support', 'Code', 'User', 'settings.json')) === '{ "editor.fontSize": 14 }\n')
+
+const D = newHome('strong')
+const extraBin = join(root, 'bin-extra')
+put(join(extraBin, 'opencode'), '#!/bin/sh\nexit 0\n')
+chmodSync(join(extraBin, 'opencode'), 0o755)
+mkdirSync(join(D, 'SystemApps', 'Visual Studio Code.app'), { recursive: true }) // stands in for /Applications
+mkdirSync(join(D, 'Applications', 'Cursor.app'), { recursive: true }) // ~/Applications
+put(join(D, '.gemini', 'settings.json'), '{}\n') // a file the client writes
+put(join(D, '.codex', 'auth.json'), '{}\n')
+mkdirSync(join(D, '.cursor', 'skills'), { recursive: true })
+const sd = snapshot(D)
+r = cli(D, ['install', '--dry-run'], { shims: false, extraPath: [extraBin] })
+ok('strong signals: app in /Applications, app in ~/Applications, command on PATH, client-written files',
+  /Found 5 MCP clients/.test(r.out) && ['VS Code (~/SystemApps/Visual Studio Code.app)', 'Cursor (~/Applications/Cursor.app)', 'OpenCode (opencode on PATH)', 'Gemini CLI (~/.gemini/settings.json)', 'Codex (~/.codex/auth.json)'].every((x) => r.out.includes(x)), r.out)
+ok('dry run: still nothing written', sameSnap(snapshot(D), sd), changedKeys(snapshot(D), sd))
 
 section('--local: the stdio server everywhere')
 const Lo = newHome('local')

@@ -10,7 +10,7 @@ One key unlocks GPT-6.1, Claude, Gemini, GLM, DeepSeek, Qwen, Seedance, Veo, Kli
 npx -y apimodels-mcp install
 ```
 
-Needs [Node.js](https://nodejs.org/en/download) 18 or later. It looks for the MCP clients installed on this computer, lists them, and asks Y/n for each before adding apimodels to that client's own config. It adds the **hosted server** `https://api.apimodels.app/mcp`, so there is no key to copy: each client asks you to sign in to apimodels.app and click **Authorize** the first time it uses the server.
+Needs [Node.js](https://nodejs.org/en/download) 18 or later. It looks for the MCP clients installed on this computer (its command on PATH, its app, or its config file; a leftover folder alone does not count), lists them, and asks Y/n for each before adding apimodels to that client's own config. It adds the **hosted server** `https://api.apimodels.app/mcp`, so there is no key to copy: each client asks you to sign in to apimodels.app and click **Authorize** the first time it uses the server.
 
 | Client | What the installer changes |
 |--------|----------------------------|
@@ -34,7 +34,7 @@ npx -y apimodels-mcp install --local            # local server everywhere: it ca
 npx -y apimodels-mcp uninstall                  # remove apimodels again (also takes --yes / --dry-run / --client)
 ```
 
-Other flags: `--replace` replaces a different existing entry without asking, `--no-login` skips the browser sign-in at the end. Client names for `--client`: `claude-code`, `codex`, `claude-desktop`, `cursor`, `vscode`, `windsurf`, `gemini`, `opencode`.
+Other flags: `--replace` replaces a different existing entry without asking, `--no-login` skips the browser sign-in at the end. Client names for `--client`: `claude-code`, `codex`, `claude-desktop`, `cursor`, `vscode`, `windsurf`, `gemini`, `opencode`; a client named this way is set up even if it does not look installed.
 
 ## Fastest setup: the Codex / Claude Code plugin
 
@@ -252,7 +252,7 @@ Everything the tools call is documented on apimodels.app:
 pnpm install
 pnpm build
 pnpm test                                     # offline self-test (mocked API) + installer test (fake HOME), no network, no cost
-pnpm test:mutations                           # breaks the installer 17 ways; each break must turn the installer test red
+pnpm test:mutations                           # breaks the installer 19 ways; each break must turn the installer test red
 APIMODELS_API_KEY=sk_... node dist/index.js   # runs over stdio
 ```
 
