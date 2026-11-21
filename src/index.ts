@@ -57,7 +57,9 @@ const POLL_INTERVAL_MS = 3_000
 // them to paste the key into the chat.
 const NO_KEY_MSG = `No apimodels API key found. Run \`npx -y apimodels-mcp login\` (you can run it for the user): it opens apimodels.app in their browser, they click Authorize, and the key is saved on this machine — nothing to copy or paste, no restart needed. Do not ask the user to paste a key into the chat. Keys: ${KEYS_URL}`
 
-const VERSION = '0.10.0'
+const VERSION = '0.11.0'
+/** Sent on every request to the apimodels API so MCP traffic can be told apart in our logs (no user data). */
+const USER_AGENT = `apimodels-mcp/${VERSION}`
 
 /**
  * Hosted mode (`apimodels-mcp serve`, see http.ts): every HTTP request runs inside
@@ -88,6 +90,7 @@ async function apiFetch(path: string, init?: RequestInit): Promise<any> {
     headers: {
       Authorization: `Bearer ${key}`,
       'Content-Type': 'application/json',
+      'User-Agent': USER_AGENT,
       ...(init?.headers || {}),
     },
   })
@@ -109,7 +112,7 @@ async function apiFetch(path: string, init?: RequestInit): Promise<any> {
 async function apiFetchBytes(path: string, body: unknown): Promise<{ buf: Buffer; contentType: string }> {
   const res = await fetch(`${BASE_URL}${path}`, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${requireKey()}`, 'Content-Type': 'application/json' },
+    headers: { Authorization: `Bearer ${requireKey()}`, 'Content-Type': 'application/json', 'User-Agent': USER_AGENT },
     body: JSON.stringify(body),
   })
   const contentType = (res.headers.get('content-type') || '').split(';')[0].trim()
@@ -216,6 +219,39 @@ function assetTypeOf(name: string): 'Image' | 'Video' | 'Audio' | undefined {
 /** Public video model ids whose request reads the first frame from the scalar `image` field rather than images[]. */
 const FIRST_FRAME_AS_IMAGE = new Set(['kling-v2-6', 'kling-video-o1', 'kling-v3-omni', 'kling-effects', 'dreamactor-v2', 'v3.1-fast-start-end', 'wan-animate'])
 
+/**
+ * Public video model ids whose route takes the first frame ONLY from `first_frame_url` and reads images[] as
+ * reference images (checked against the backend's video-generations.ts, 2026-11-21). Up to 0.10 this tool sent
+ * image_url as images[] for them, so "image-to-video" on Seedance 2.x (the default model), Kling 4.0, Wan 3.0, Muse,
+ * Gemini Omni 1.2 Flash … quietly became reference-to-video — the clip did not start from the picture — and the two
+ * Wan Spicy image-to-video models received no image at all. seedance-2.5-lite has no first-frame mode: sending
+ * first_frame_url gets a clear 400 telling the caller to use reference_image_urls, instead of a silent switch.
+ * Compared after normalizing "4-0" to "4.0", so the alias spellings (kling-4-0, seedance-2-0-fast) match too.
+ */
+const FIRST_FRAME_AS_URL = new Set([
+  'seedance-2.0', 'seedance-2.0-fast', 'seedance-2.0-mini', 'seedance-2.5', 'seedance-2.5-lite', 'seedance-2.5-flash',
+  'dreamina-seedance-2.0', 'dreamina-seedance-2.0-fast', 'dreamina-seedance-2.0-mini',
+  'wan-3.0-video', 'kling-4.0', 'kling-4.0-flash', 'ltx-2.5-fast', 'ltx-2.5-pro', 'muse-video', 'gemini-omni-1.2-flash',
+  'flux-3-max', 'wan-2.2-i2v-spicy', 'wan-2.7-i2v-spicy', 'minimax-h3-max-turbo', 'minimax-h3-rh-enhanced',
+])
+
+/** "kling-4-0" → "kling-4.0", "seedance-2-0-fast" → "seedance-2.0-fast"; lower-cased. */
+function normalizeModelId(model: string): string {
+  return model.trim().toLowerCase().replace(/(\d)-(\d)/g, '$1.$2')
+}
+
+/** Which request field carries the first frame for this video model. Exported for the selftest. */
+export function firstFrameField(model: string, hasLastFrame: boolean): 'first_frame_url' | 'image' | 'images' | 'input_urls' {
+  const id = normalizeModelId(model)
+  if (/motion-control$/.test(id)) return 'input_urls'
+  if (FIRST_FRAME_AS_URL.has(id)) return 'first_frame_url'
+  // H3 Lite: its first + last frame mode needs both as *_frame_url; with one image it is a reference (the only one-image mode).
+  if (id === 'minimax-h3-lite' && hasLastFrame) return 'first_frame_url'
+  // FIRST_FRAME_AS_IMAGE holds the ids as published (kling-v2-6 must not become kling-v2.6), so compare it un-normalized.
+  if (FIRST_FRAME_AS_IMAGE.has(model.trim().toLowerCase())) return 'image'
+  return 'images'
+}
+
 /** Resolve every entry of an optional list (local paths / data: URIs uploaded, URLs and asset:// passed through). */
 async function resolveMediaList(list?: string[]): Promise<string[] | undefined> {
   if (!list?.length) return undefined
@@ -235,7 +271,7 @@ async function uploadBytes(buf: Buffer, filename: string, contentType: string): 
   // No Content-Type header here on purpose — fetch must set the multipart boundary.
   const res = await fetch(`${BASE_URL}/files`, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${requireKey()}` },
+    headers: { Authorization: `Bearer ${requireKey()}`, 'User-Agent': USER_AGENT },
     body: form,
   })
   const json: any = await res.json().catch(() => ({}))
@@ -552,7 +588,7 @@ export function buildServer(): McpServer {
     'Chat / text completion with any LLM on apimodels.app (GPT-6.1, Claude, Gemini, GLM, DeepSeek, Qwen, …). Returns the assistant reply text.',
     {
       prompt: z.string().describe('The user message / prompt.'),
-      model: z.string().default('gpt-6.1-sol').describe('Model id, e.g. gpt-6.1-sol, gpt-6-sol, claude-opus-5-5, claude-sonnet-5-5 (Claude Sonnet 5.5, fast and strong at coding and agent work, $1.20 / $6 per 1M tokens), claude-sonnet-5, gemini-3-pro-preview, deepseek-v4-pro. Call list_models for the full list.'),
+      model: z.string().default('gpt-6.1-sol').describe('Model id, e.g. gpt-6.1-sol, gpt-6.2-sol, gpt-6.2-astra, gpt-6-sol, claude-opus-5-5, claude-fable-5-2, claude-sonnet-5-5 (Claude Sonnet 5.5, fast and strong at coding and agent work, $1.20 / $6 per 1M tokens), claude-sonnet-5, gemini-3-pro-preview, gemini-4-carbon, qwen4-max, deepseek-v4-pro. Call list_models for the full list.'),
       system: z.string().optional().describe('Optional system prompt.'),
       max_tokens: z.number().int().positive().optional().describe('Optional max output tokens.'),
     },
@@ -578,7 +614,7 @@ export function buildServer(): McpServer {
     'Generate an image from a text prompt, or edit / combine input images. Returns the URL(s) of the generated image(s), valid 30 days, plus a downscaled preview when the client can show tool-result images to you. Images take about 50 s (9 in 10 within 90 s); if the task is still running when wait_seconds is up you get a task id — call get_task with it, do not resubmit. If you cannot see the image in the result, call review_image with the returned URL to get a written critique and a revised prompt, then generate again. Roughly $0.025 per image on the default model; gpt-image-2-lite is $0.01. gpt-image-2.6-flare / gpt-image-2.6-sunburst can also return an animated GIF (output_format "gif", 2–16 frames) or an SVG vector (output_format "svg", text-to-image only, $0.0315); a GIF on a solid green screen comes back with the green keyed out to transparent (pass background "opaque" to keep it).',
     {
       prompt: z.string().optional().describe('Text description of the image to generate (or the edit to make). Required, except with layer_decomposition where it is optional.'),
-      model: z.string().default('gpt-image-2').describe('Image model id, e.g. gpt-image-2, gpt-image-2.6-flare (GIF / SVG output, markup-image edits, up to 16 references), gpt-image-2.6-sunburst (highest fidelity), gpt-image-2.5-flare, flux-2-klein-4b ($0.006, fastest, up to 3 reference images), gpt-image-2-lite, gemini-3-pro-image, gemini-3-pro-image-gemini ($0.03 flat), qwen3-image (small in-image text), gemini-3.1-flash-image, nano-banana-2-1 (Google Nano Banana 2.1: $0.022 1K / $0.036 2K / $0.06 4K, accurate in-image text, 15 aspect ratios incl. 21:9 and 1:8), doubao-seedream-5-0-flash ($0.03, fast, 1K/2K; supports background and layer_decomposition), doubao-seedream-5-0-pro ($0.03 1K / $0.06 2K, precise region edits). Call list_models for the full list.'),
+      model: z.string().default('gpt-image-2').describe('Image model id, e.g. gpt-image-2, gpt-image-2.6-flare (GIF / SVG output, markup-image edits, up to 16 references), gpt-image-2.6-sunburst (highest fidelity), gpt-image-2.5-flare, flux-2-klein-4b ($0.006, fastest, up to 3 reference images), gpt-image-2-lite, gemini-3-pro-image, gemini-3-pro-image-gemini ($0.03 flat), qwen3-image (small in-image text), gemini-3.1-flash-image, nano-banana-2-1 (Google Nano Banana 2.1: $0.022 1K / $0.036 2K / $0.06 4K, accurate in-image text, 15 aspect ratios incl. 21:9 and 1:8), doubao-seedream-5-0-flash ($0.03, fast, 1K/2K; supports background and layer_decomposition), doubao-seedream-5-0-pro ($0.03 1K / $0.06 2K, precise region edits). Also: doubao-seedream-5-5, kling-image-4.0, mai-image-2.7, mai-image-2.7-flash, minimax-h3-image. Call list_models for the full list.'),
       aspect_ratio: z.string().optional().describe('Optional aspect ratio, e.g. 1:1, 16:9, 9:16.'),
       resolution: z.string().optional().describe('Optional resolution tier, e.g. 1K, 2K, 4K.'),
       size: z.string().optional().describe('Optional exact pixel size "WIDTHxHEIGHT", e.g. 1024x1024 or 1536x1024 (models that take exact sizes, such as the gpt-image family). For a GIF this is the size of each frame.'),
@@ -672,18 +708,18 @@ export function buildServer(): McpServer {
     'Generate or process a video: text-to-video, image-to-video, first + last frame, multi-reference, lip sync and talking avatars (image or video + audio), motion transfer (image + driving video), upscaling and subtitle removal (video in). Submits the job and waits up to wait_seconds: returns the video URL(s) (valid 30 days) if it finishes in time, otherwise a task id — then call get_task with that id; never resubmit a running task. Video takes a median 2.5 minutes and 9 in 10 finish within 8 minutes, so expect one or two get_task calls. Video is the most expensive modality here — the default model is billed per second ($0.071/s at 480p, $0.153/s at 720p, so a 5-second 480p clip is about $0.36); pass model:"veo-3.1-fast-fhd" for a flat $0.088 per 8-second 1080p clip. Each model reads only the inputs it supports — check its page on apimodels.app/docs.',
     {
       prompt: z.string().optional().describe('Text description of the video. Required by generation models; optional for processing models (video-upscale, flashvsr, subtitle-erase, lip sync with audio).'),
-      model: z.string().default('seedance-2.0-fast').describe('Video model id. Generation: seedance-2.0-fast, seedance-2.0, seedance-2.0-mini, seedance-2.5, wan-3.0-video, minimax-h3, minimax-h3-lite (from $0.01/s, up to 768p), ltx-2.3, grok-imagine-video-1.5, veo-3.1-fast-fhd ($0.088 flat), veo-3.1, kling-v2-6, kling-4.0, kling-4.0-flash (720p only, 3–20 s, $0.094/s, same fields as kling-4.0), vidu-q4. First + last frame (image_url + last_frame_url): v3.1-fast-start-end, seedance, kling. Talking avatar from a photo (image_url + audio_url): omnihuman-2.0, ai-lipsync. Talking avatar from a video (video_url + audio_url): digital-human. Motion transfer (image_url + driving video_url): dreamactor-v2, wan-animate, kling-motion-control, kling-v3-motion-control. Video in: video-upscale and flashvsr (upscale; target in resolution), subtitle-erase. Kling lip sync is two calls: kling-identify-face (video_url) returns a session and face ids, then kling-lip-sync-video (audio_url) or kling-lip-sync-tts (text / voiceId) with sessionId and faceId in extra. Call list_models for the full list.'),
+      model: z.string().default('seedance-2.0-fast').describe('Video model id. Generation: seedance-2.0-fast, seedance-2.0, seedance-2.0-mini, seedance-2.5, seedance-2.5-flash, wan-3.0-video, minimax-h3, minimax-h3-lite (from $0.01/s, up to 768p), ltx-2.5-fast, ltx-2.5-pro, ltx-2.3, grok-imagine-video-1.5, veo-3.1-fast-fhd ($0.088 flat), veo-3.1, kling-v2-6, kling-4.0, kling-4.0-flash (720p only, 3–20 s, $0.094/s, same fields as kling-4.0), gemini-omni-1.2-flash, muse-video. image_url is the FIRST FRAME (the clip starts from that picture); to have images used as references (characters, products, style) instead, pass reference_image_urls — seedance-2.5-lite takes reference images only. First + last frame (image_url + last_frame_url): seedance, kling, minimax-h3-lite, v3.1-fast-start-end. Talking avatar from a photo (image_url + audio_url): kling-avatar, omnihuman-2.0, ai-lipsync. Talking avatar from a video (video_url + audio_url): digital-human. Lip sync an existing video to new audio (video_url + audio_url, faces found automatically; optional face_index in extra): kling-lip-sync. Motion transfer (image_url + driving video_url): dreamactor-v2, wan-animate, kling-motion-control, kling-v3-motion-control. Video in: video-upscale and flashvsr (upscale; target in resolution), subtitle-erase. Call list_models for the full list.'),
       aspect_ratio: z.string().optional().describe('Optional aspect ratio, e.g. 16:9, 9:16, 1:1.'),
       resolution: z.string().optional().describe('Optional resolution, e.g. 480p, 720p, 1080p.'),
       duration: z.union([z.number(), z.string()]).optional().describe('Optional duration in seconds, e.g. 5 or 10.'),
-      image_url: z.string().optional().describe('Optional first frame / subject image (image-to-video, avatar, motion transfer). Accepts a public https:// URL, a LOCAL FILE PATH, a localhost URL, a data: URI or an asset:// reference — local sources are uploaded for you automatically.'),
+      image_url: z.string().optional().describe('Optional first frame (image-to-video: the clip starts from it) or the subject image for avatars and motion transfer. Accepts a public https:// URL, a LOCAL FILE PATH, a localhost URL, a data: URI or an asset:// reference — local sources are uploaded for you automatically.'),
       last_frame_url: z.string().optional().describe('Optional last frame for first + last frame models (e.g. v3.1-fast-start-end, seedance). Same accepted forms as image_url.'),
       image_urls: z.array(z.string()).optional().describe('Several input images for models that take more than one (e.g. omnihuman-2.0, multi-image references). Same accepted forms as image_url.'),
       reference_image_urls: z.array(z.string()).optional().describe('Seedance 2.x / Kling Omni reference images (characters, products, style), up to 9 on Seedance. asset:// references from upload_asset are accepted for a fixed real person.'),
       reference_video_urls: z.array(z.string()).optional().describe('Seedance 2.x reference videos (camera move, motion, edit target).'),
       reference_audio_urls: z.array(z.string()).optional().describe('Seedance 2.x reference audio (voice, music, sound).'),
       video_url: z.string().optional().describe('Input video for lip sync, motion transfer (driving video), upscaling, subtitle removal or video edits. Same accepted forms as image_url; local videos up to 100 MB are uploaded for you.'),
-      audio_url: z.string().optional().describe('Input audio for talking avatars and lip sync (omnihuman-2.0, digital-human, ai-lipsync, kling-lip-sync-video). Same accepted forms as image_url; local audio up to 10 MB.'),
+      audio_url: z.string().optional().describe('Input audio for talking avatars and lip sync (kling-avatar, kling-lip-sync, omnihuman-2.0, digital-human, ai-lipsync). Same accepted forms as image_url; local audio up to 10 MB.'),
       negative_prompt: z.string().optional().describe('Optional: what to avoid (models that support it).'),
       seed: z.number().int().optional().describe('Optional random seed for repeatable results (models that support it).'),
       generate_audio: z.boolean().optional().describe('Optional: ask models that can add sound (e.g. Seedance, Veo) to generate audio — or set false for a silent clip.'),
@@ -708,14 +744,15 @@ export function buildServer(): McpServer {
         // backend's video-generations.ts, 2026-11-08): most read images[0] (what this tool has sent since 0.3); the
         // Kling video family, dreamactor-v2, v3.1-fast-start-end and wan-animate read the scalar `image` (images[] was
         // silently ignored there); Kling Motion Control requires input_urls + video_urls.
+        // 2026-11-21: Seedance 2.x, Kling 4.0, Wan 3.0, Muse … take it only as first_frame_url (see FIRST_FRAME_AS_URL).
         const motionControl = /motion-control$/i.test(model)
         if (image_url) {
           const u = await resolveMediaInput(image_url)
-          if (motionControl) body.input_urls = [u]
-          else if (FIRST_FRAME_AS_IMAGE.has(model.toLowerCase())) body.image = u
-          else body.images = [u]
+          const field = firstFrameField(model, !!last_frame_url)
+          if (field === 'images' || field === 'input_urls') body[field] = [u]
+          else body[field] = u
         }
-        // Last frame: Seedance / MiniMax / Vidu / Muse read last_frame_url, Kling and v3.1-fast-start-end read image_tail.
+        // Last frame: Seedance / MiniMax / Muse / Kling 4.0 read last_frame_url, Kling 2.x and v3.1-fast-start-end read image_tail.
         if (last_frame_url) {
           const u = await resolveMediaInput(last_frame_url)
           body.last_frame_url = u

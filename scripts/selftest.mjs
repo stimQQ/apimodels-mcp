@@ -39,7 +39,7 @@ globalThis.fetch = async (input, init = {}) => {
   } else if (typeof body === 'string') {
     try { body = JSON.parse(body) } catch { /* keep string */ }
   }
-  calls.push({ url, method, body, files })
+  calls.push({ url, method, body, files, headers: { ...(init.headers || {}) } })
   const path = url.replace('https://api.test/v1', '')
   if (method === 'POST' && path === '/images/generations' && syncImageAnswer) return jsonRes({ created: 1, data: [{ url: 'https://r2.test/images/sync.gif' }] })
   if (method === 'POST' && /^\/(images|video|audio)\/generations$/.test(path)) return jsonRes({ code: 200, data: { taskId: 'task_1' } })
@@ -133,7 +133,7 @@ ok('gpt-image + transparent works without an input image', !r.isError && r.req?.
 console.log('\n— generate_video —')
 r = await call('generate_video', { model: 'seedance-2.0-fast', prompt: 'p', image_url: localPng, last_frame_url: 'https://cdn.test/end.png', reference_image_urls: ['asset://asset-1'], reference_video_urls: [localMp4], reference_audio_urls: [localMp3], generate_audio: false, seed: 7, negative_prompt: 'blur' }, '/video/generations')
 b = r.req?.body ?? {}
-ok('seedance: first frame as images[0] (unchanged since 0.3)', JSON.stringify(b.images) === JSON.stringify(['https://r2.test/uploads/face.png']) && b.image === undefined, JSON.stringify(b))
+ok('seedance: first frame as first_frame_url, not images[] (the route reads images[] as references)', b.first_frame_url === 'https://r2.test/uploads/face.png' && b.images === undefined && b.image === undefined, JSON.stringify(b))
 ok('last frame sent as last_frame_url and image_tail', b.last_frame_url === 'https://cdn.test/end.png' && b.image_tail === 'https://cdn.test/end.png', JSON.stringify(b))
 ok('reference lists resolved (asset:// kept, local mp4 / mp3 uploaded)', b.reference_image_urls?.[0] === 'asset://asset-1' && b.reference_video_urls?.[0] === 'https://r2.test/uploads/clip.mp4' && b.reference_audio_urls?.[0] === 'https://r2.test/uploads/voice.mp3', JSON.stringify(b))
 const up = r.calls.filter((c) => c.url.endsWith('/files')).map((c) => c.files.type).sort()
@@ -223,6 +223,33 @@ ok('generate_audio output is unchanged: just the URL', r.text === 'https://r2.te
 r = await call('generate_video', { model: 'kling-4.0-flash', prompt: 'p', image_url: 'https://cdn.test/a.png', resolution: '720p', duration: 5 }, '/video/generations')
 const k4 = (await call('generate_video', { model: 'kling-4.0', prompt: 'p', image_url: 'https://cdn.test/a.png', resolution: '720p', duration: 5 }, '/video/generations')).req?.body
 ok('kling-4.0-flash sends exactly the fields kling-4.0 does', JSON.stringify({ ...r.req?.body, model: 'kling-4.0' }) === JSON.stringify(k4), JSON.stringify(r.req?.body))
+
+console.log('\n— first frame field per model (0.11.0) —')
+const ff = async (model, extra = {}) => (await call('generate_video', { model, prompt: 'p', image_url: 'https://cdn.test/a.png', ...extra }, '/video/generations')).req?.body ?? {}
+for (const m of ['seedance-2.0', 'seedance-2.0-mini', 'seedance-2.5', 'seedance-2.5-flash', 'seedance-2.5-lite', 'dreamina-seedance-2-0-fast', 'kling-4.0', 'kling-4-0', 'kling-4.0-flash', 'KLING-4.0', 'wan-3.0-video', 'ltx-2.5-fast', 'muse-video', 'gemini-omni-1.2-flash', 'flux-3-max', 'wan-2.2-i2v-spicy', 'wan-2.7-i2v-spicy', 'minimax-h3-max-turbo', 'minimax-h3-rh-enhanced']) {
+  const fb = await ff(m)
+  ok(`${m}: first frame as first_frame_url`, fb.first_frame_url === 'https://cdn.test/a.png' && fb.images === undefined && fb.image === undefined, JSON.stringify(fb))
+}
+for (const m of ['omnihuman-2.0', 'kling-avatar', 'minimax-h3', 'grok-imagine-video-1.5', 'veo-3.1-fast-fhd', 'ltx-2.3', 'gemini-omni-flash']) {
+  const fb = await ff(m)
+  ok(`${m}: still images[] (that route reads images[0])`, JSON.stringify(fb.images) === '["https://cdn.test/a.png"]' && fb.first_frame_url === undefined, JSON.stringify(fb))
+}
+let fb = await ff('minimax-h3-lite')
+ok('minimax-h3-lite with one image: images[] (its only one-image mode is reference)', JSON.stringify(fb.images) === '["https://cdn.test/a.png"]' && fb.first_frame_url === undefined, JSON.stringify(fb))
+fb = await ff('minimax-h3-lite', { last_frame_url: 'https://cdn.test/z.png' })
+ok('minimax-h3-lite with a last frame: first_frame_url + last_frame_url', fb.first_frame_url === 'https://cdn.test/a.png' && fb.last_frame_url === 'https://cdn.test/z.png' && fb.images === undefined, JSON.stringify(fb))
+fb = await ff('kling-4.0', { last_frame_url: 'https://cdn.test/z.png', reference_image_urls: ['https://cdn.test/r.png'] })
+ok('explicit reference_image_urls stay references next to a first frame', fb.first_frame_url === 'https://cdn.test/a.png' && JSON.stringify(fb.reference_image_urls) === '["https://cdn.test/r.png"]', JSON.stringify(fb))
+fb = await ff('kling-v2-6')
+ok('kling-v2-6 unchanged: scalar image', fb.image === 'https://cdn.test/a.png' && fb.first_frame_url === undefined, JSON.stringify(fb))
+
+console.log('\n— user agent / catalog text —')
+r = await call('generate_video', { model: 'seedance-2.0-fast', prompt: 'p' }, '/video/generations')
+ok('API calls carry User-Agent apimodels-mcp/<version>', /^apimodels-mcp\/\d+\.\d+\.\d+$/.test(r.req?.headers?.['User-Agent'] ?? ''), JSON.stringify(r.req?.headers))
+const vtool = (await client.listTools()).tools.find((t) => t.name === 'generate_video')
+const vtext = JSON.stringify(vtool)
+ok('generate_video no longer lists the retired vidu-q4', !/vidu/i.test(vtext), 'vidu still mentioned')
+ok('generate_video lists the new video models', ['seedance-2.5-flash', 'ltx-2.5-fast', 'kling-avatar', 'kling-lip-sync', 'gemini-omni-1.2-flash'].every((m) => vtext.includes(m)), vtext.slice(0, 200))
 
 console.log('\n— voices: kling list, mine, clone, delete —')
 r = await call('list_voices', { provider: 'kling', language: 'en' })
